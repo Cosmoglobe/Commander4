@@ -376,9 +376,9 @@ class TestNoisePSD2Oof:
         sigma0, ntod = 1.234, 2**13
         residual = (_synth_2oof_corr_noise(1, ntod, _2OOF_FSAMP, sigma0, 0.3, -2.0, 1.0, 2.0)
                     + np.random.default_rng(2).normal(0.0, sigma0, ntod))
-        _seed_all_rng(0)
+        rng = np.random.default_rng(0)
         params = np.array([sigma0, 0.2, -1.5, 2.0, 1.5])
-        out = m.sample_params(residual, params, _2OOF_FSAMP)
+        out = m.sample_params(residual, params, _2OOF_FSAMP, rng)
         assert out.shape == params.shape
         assert out[0] == params[0]            # sigma0 held fixed
         assert out is not params              # returns a fresh array
@@ -397,9 +397,9 @@ class TestNoisePSD2Oof:
         tolerances below.
         """
         m, residual = self._model(), self._residual()
-        _seed_all_rng(123)
+        rng = np.random.default_rng(123)
         draws = np.array([m.sample_params(residual, np.array([1.0, 0.05, -1.0, 4.0, 0.8]),
-                                          _2OOF_FSAMP, bin_psd=True, n_grid=600, n_burnin=49)
+                                          _2OOF_FSAMP, rng, bin_psd=True, n_grid=600, n_burnin=49)
                           for _ in range(8)])
         mean = draws[:, 1:].mean(axis=0)
         assert mean[0] == pytest.approx(_2OOF_TRUTH[1], rel=0.4)   # fknee
@@ -416,8 +416,8 @@ class TestNoisePSD2Oof:
         accumulate over the run even though any single call looks harmless.
         """
         m, residual = self._model(), self._residual()
-        _seed_all_rng(5)
-        draws = np.array([m.sample_params(residual, _2OOF_TRUTH.copy(), _2OOF_FSAMP,
+        rng = np.random.default_rng(5)
+        draws = np.array([m.sample_params(residual, _2OOF_TRUTH.copy(), _2OOF_FSAMP, rng,
                                           bin_psd=bin_psd) for _ in range(4)])
         mean = draws[:, 1:].mean(axis=0)
         assert mean[0] == pytest.approx(_2OOF_TRUTH[1], rel=0.4), f"bin_psd={bin_psd}"
@@ -436,8 +436,8 @@ class TestNoisePSD2Oof:
         m = NoisePSD2Oof()
         for idx in (1, 2, 3, 4):
             assert float(m.P_uni[idx, 0]) > 0.0 or not m.P_lognorm[idx], m.param_names[idx]
-        _seed_all_rng(3)
-        out = m.sample_params(self._residual(2**12, 4), _2OOF_TRUTH.copy(), _2OOF_FSAMP)
+        out = m.sample_params(self._residual(2**12, 4), _2OOF_TRUTH.copy(), _2OOF_FSAMP,
+                              np.random.default_rng(3))
         assert np.all(np.isfinite(out))
         for idx in (1, 2, 3, 4):
             assert m.P_uni[idx, 0] <= out[idx] <= m.P_uni[idx, 1], m.param_names[idx]
@@ -467,9 +467,8 @@ class TestNoisePSD2Oof:
         mask = np.ones(tod.size, dtype=bool)
         mask[1000:1050] = False  # contiguous gap
         mask[2000] = False       # single-sample gap
-        _seed_all_rng(0)
         res = sample_correlated_noise(tod.copy(), mask, _2OOF_TRUTH.copy(), m, _2OOF_FSAMP,
-                                      cg_err_tol=1e-6, cg_max_iter=50, sample_params=True,
+                                      np.random.default_rng(0), cg_err_tol=1e-6, cg_max_iter=50, sample_params=True,
                                       sample_sigma0=False)
         assert res.n_corr.shape == tod.shape
         assert np.all(np.isfinite(res.n_corr))
@@ -485,9 +484,8 @@ class TestNoisePSD2Oof:
         mask[1000:1100] = False
         mask[2000] = False
         for method in ("fallback", "full_cg"):
-            _seed_all_rng(0)
             out = realize_noise_in_gaps(noise.copy(), mask, m, _2OOF_TRUTH, _2OOF_FSAMP,
-                                        _2OOF_FSAMP, method)
+                                        _2OOF_FSAMP, method, np.random.default_rng(0))
             assert np.all(np.isfinite(out))
             assert np.array_equal(out[mask], noise[mask])      # valid samples untouched
             assert not np.allclose(out[~mask], noise[~mask])   # gaps replaced

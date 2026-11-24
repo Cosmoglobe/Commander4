@@ -408,8 +408,8 @@ class NoisePSD2Oof(NoisePSD):
         vals[pos] = s0 ** 2 * ((freqs[pos] / fk) ** a + (freqs[pos] / fk2) ** a2)
         return vals
 
-    def sample_params(self, residual: NDArray, noise_params: NDArray, fsamp: float, *,
-                      bin_psd: bool = False,
+    def sample_params(self, residual: NDArray, noise_params: NDArray, fsamp: float,
+                      rng: np.random.Generator, *, bin_psd: bool = False,
                       n_grid: int = 150, n_burnin: int = 4) -> NDArray:
         """ Draw a sample of (fknee, alpha, fknee2, alpha2) for the double 1/f model.
             See the NoisePSDOof class docstring for full explanation.
@@ -479,7 +479,7 @@ class NoisePSD2Oof(NoisePSD):
                     f**alpha_current, fknee_grid**(-alpha_current), power_scaled, weight,
                     offset=offset,
                 ) + log_prior_fknee
-                fknee_current = float(_inversion_sampler_1d(log_L_fknee, fknee_grid))            
+                fknee_current = float(_inversion_sampler_1d(log_L_fknee, fknee_grid, rng))
 
             # 2. Sample alpha | fknee, fknee2, alpha2
             if sample_alpha:
@@ -489,7 +489,7 @@ class NoisePSD2Oof(NoisePSD):
                     np.log(f) - np.log(fknee_current), alpha_grid, power_scaled, weight,
                     exponentiate=True, offset=offset,
                 ) + log_prior_alpha
-                alpha_current = float(_inversion_sampler_1d(log_L_alpha, alpha_grid))
+                alpha_current = float(_inversion_sampler_1d(log_L_alpha, alpha_grid, rng))
 
             # 3. Sample fknee2 | fknee, alpha, alpha2
             if sample_fknee2:
@@ -499,7 +499,7 @@ class NoisePSD2Oof(NoisePSD):
                     f**alpha2_current, fknee2_grid**(-alpha2_current), power_scaled, weight,
                     offset=offset,
                 ) + log_prior_fknee2
-                fknee2_current = float(_inversion_sampler_1d(log_L_fknee2, fknee2_grid))
+                fknee2_current = float(_inversion_sampler_1d(log_L_fknee2, fknee2_grid, rng))
                 
             # 4. Sample alpha2 | fknee, alpha and fknee2
             if sample_alpha2:
@@ -509,7 +509,7 @@ class NoisePSD2Oof(NoisePSD):
                     np.log(f) - np.log(fknee2_current), alpha2_grid, power_scaled, weight,
                     exponentiate=True, offset=offset,
                 ) + log_prior_alpha2
-                alpha2_current = float(_inversion_sampler_1d(log_L_alpha2, alpha2_grid))
+                alpha2_current = float(_inversion_sampler_1d(log_L_alpha2, alpha2_grid, rng))
         out = np.array(noise_params, dtype=np.float64, copy=True)
         out[1] = fknee_current
         out[2] = alpha_current
