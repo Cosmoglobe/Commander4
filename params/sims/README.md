@@ -40,9 +40,10 @@ and has no spread to give.
 ### The transfer-function pair
 
 `param_transfunc.yml` applies a single-pole bolometer response (τ = 150 ms) to every band.
-`simparam_transfunc.yml` is the only file here that sets `mapmaker: "CG"`. A band's `tau_ms` (or
-`tau_sec`) gives the CG mapmaker the transfer function T to deconvolve. Only Band30GHz sets it, so
-the other bands are solved with T = 1, which ignores the response. Two limits apply:
+`simparam_transfunc.yml` is the only file here that sets `mapmaker: "CG"`. A band's
+`transfer_function` block (here `tau_ms`) gives the CG mapmaker the transfer function T to
+deconvolve. Only Band30GHz sets it, so the other bands are solved with T = 1, which ignores the
+response. Two limits apply:
 - The sky model, orbital dipole and far sidelobes are subtracted without T. With T on, the
   residuals and the n_corr, gain and χ² steps therefore keep (1 − T) times these models.
 - The binned mapmaker ignores T.
@@ -51,8 +52,8 @@ the other bands are solved with T = 1, which ignores the response. Two limits ap
 
 `param_transfunc.yml` is a copy of `param_compsep.yml` with only the bolometer response switched on
 at the same seed, and `simparam_transfunc.yml` is a copy of `simparam_compsep_only.yml` with only the
-paths, the mapmaker and Band30GHz's `tau_ms` changed. The input sky and the noise realization are
-therefore identical between the two runs:
+paths, the mapmaker and Band30GHz's `transfer_function` changed. The input sky and the noise
+realization are therefore identical between the two runs:
 
 ```bash
 mpirun -n 12 c4-simgen -p simgen/params/param_compsep.yml      # TF off, the reference
@@ -240,7 +241,8 @@ pair is a controlled difference rather than a recovery. Generate the TODs first,
 18 tasks = 6 TOD + 6 CompSep-I + 6 CompSep-QU.
 
 This file is a copy of `simparam_compsep_only.yml` with only the paths (the six TOD filelists, the
-output directory and the log file), the mapmaker (`"CG"`) and Band30GHz's `tau_ms: 150.0` changed.
+output directory and the log file), the mapmaker (`"CG"`) and Band30GHz's `transfer_function`
+(`tau_ms: 150.0`) changed.
 So only Band30GHz deconvolves the bolometer response; the other bands are solved as if T = 1. The
 model TODs (sky model, orbital dipole, far sidelobes) are subtracted without T.
 
