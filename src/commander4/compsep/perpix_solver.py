@@ -14,15 +14,14 @@ from pixell import curvedsky
 
 from commander4.sky.comp_list import CompList
 from commander4.backend import compsep as cpp_compsep
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.diagnostics.performance import benchmark
 
 logger = logging.getLogger(__name__)
 
 
-def solve_compsep_perpix(solver_comm: MPI.Comm, band_map: DetectorMap, comp_list: CompList,
-                         double_precision: bool, nthreads: int,
-                         rng: np.random.Generator) -> None:
+def solve_compsep_perpix(solver_comm: MPI.Comm, band_map: BandMap, comp_list: CompList,
+                         nthreads: int, rng: np.random.Generator) -> None:
     """ A pixel-by-pixel solver for the component separation problem, which leaves the solution in
         the components of `comp_list`, on every rank of `solver_comm`. Requires uniform nside and a
         common beam across all bands (smoothing to a common resolution is done at the data sources,
@@ -35,15 +34,17 @@ def solve_compsep_perpix(solver_comm: MPI.Comm, band_map: DetectorMap, comp_list
     is_master = solver_comm.Get_rank() == 0
     if is_master:
         logger.verbose("Starting pixel-by-pixel component separation.")
-    complex_dtype = np.complex128 if double_precision else np.complex64
-    real_dtype = np.float64 if double_precision else np.float32
+    # The solution is stored in the components' precision.
+    complex_dtype = np.complex128 if comp_list[0].double_precision else np.complex64
+    real_dtype = np.float64 if comp_list[0].double_precision else np.float32
 
     # This solver has no beam model, so all bands should already share one resolution (smoothed at
     # ingest via compsep.common_res_fwhm); differing FWHMs silently mix resolutions, so warn.
-    all_fwhm = solver_comm.allgather(band_map.fwhm)
-    if not np.allclose(all_fwhm, all_fwhm[0]):
-        logger.warning(f"Per-pixel solver received bands at differing resolutions {all_fwhm}; the "
-                       "result mixes resolutions. Set compsep.common_res_fwhm to a common beam.")
+    all_fwhm_arcmin = solver_comm.allgather(band_map.fwhm_arcmin)
+    if not np.allclose(all_fwhm_arcmin, all_fwhm_arcmin[0]):
+        logger.warning(f"Per-pixel solver received bands at differing resolutions "
+                       f"{all_fwhm_arcmin} arcmin; the result mixes resolutions. Set "
+                       "compsep.common_res_fwhm to a common beam.")
 
     ncomp = len(comp_list)
     with benchmark("perpix-gather"):

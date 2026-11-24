@@ -1,9 +1,6 @@
-"""The abstract base class every sky component inherits from.
+"""`Component`: the base class of every sky component.
 
-`Component` owns the parts shared by every component regardless of how it is represented on the
-sky: the amplitude buffer, the polarization view, the parameter unpacking, and the interface
-(`get_sed`, `comp2band`, `band2comp`, ...) that the samplers call. The concrete families live next
-to this file: `diffuse_components.py` and `point_sources.py`.
+The component families are in `diffuse_components.py` and `point_sources.py`.
 """
 from copy import deepcopy
 import logging
@@ -20,38 +17,26 @@ logger = logging.getLogger(__name__)
 
 
 class Component:
-    """Abstract base class for every sky component.
+    """One polarization view ("I" or "QU") of a sky component, with its amplitudes `amps`."""
 
-    Holds the amplitude buffer, the polarization view, and the interface the samplers call.
-    Concrete families are defined in `diffuse_components.py` and `point_sources.py`.
-    """
-
-    # The settings of the component's `params` block in the parameter file, with their defaults.
-    # `self.cfg` holds them under the same names. Each subclass has its own `DEFAULTS`, written as
-    # `{**Parent.DEFAULTS, ...}`: a copy of the parent's settings, with the listed ones added or
-    # replaced. So the dict of a class lists every setting it accepts.
-    # A default of None accepts any value. A default written as a pair [I, QU] marks a setting
-    # that is either one value for both polarization views, or such a pair.
+    # The settings of the `params` block, with their defaults. A subclass writes its dict as
+    # `{**Parent.DEFAULTS, ...}`, so each class lists every setting it accepts.
+    # A default of None accepts any value. A default pair [I, QU] means one value for both views,
+    # or one value per view.
     DEFAULTS = {"polarization": None,  # "I", "QU" or "IQU". Must be set.
                 "init_from": None}     # A chain file or a sky map to start from.
 
-    # The polarization views ("I", "QU") that this kind of component can have.
+    # The polarization views this kind of component can have.
     legal_pols: tuple[str, ...] = ("I", "QU")
 
-    # Names of the instance attributes defining this component's SED. The compsep chain writer
-    # stores each under `comps/<comp_name>/sed/`, so a chain describes its own SED without the
-    # parameter file. Fixed parameters (`nu_ref`, `T`) are listed alongside sampled ones, since
-    # which are sampled is a property of the run rather than of the component.
+    # The attributes that define the SED. The chain stores each under `comps/<comp_name>/sed/`,
+    # the fixed ones too, so that it describes the SED without the parameter file.
     sed_param_names: tuple[str, ...] = ()
 
-    # Names of the instance attributes defining this component's C(l) prior, stored under
-    # `comps/<comp_name>/Cl_prior/`. Commander3's `Dl_amp`/`Dl_beta`/`Dl_theta` analogue: the model
-    # parameters, not the evaluated spectrum. Empty for components that carry no such prior.
+    # The attributes that define the C(l) prior, stored under `comps/<comp_name>/Cl_prior/`.
     Cl_prior_param_names: tuple[str, ...] = ()
 
-    # Amplitude of the C(l) prior. None means no prior on the amplitudes: the CG solver then leaves
-    # out every prior term (C3's `CL_TYPE = none`). `DiffuseComponent` reads it from the parameter
-    # file.
+    # None means no prior on the amplitudes: the CG then leaves out every prior term.
     Cl_prior_amplitude = None
 
     def __init__(self, params: Bunch, comp_name: str, pol: str):
@@ -59,34 +44,34 @@ class Component:
 
         Args:
             params: The full parameter file.
-            comp_name: The name of the component's block under `components`. It is also the name
-                of the component's group in the chain file.
-            pol: The view to make, "I" or "QU". A component defined for IQU has both.
+            comp_name: The component's block under `components`, and its group in the chain file.
+            pol: The view, "I" or "QU". A component defined for IQU has both.
         """
         if pol not in self.legal_pols:
             raise ValueError(f"Component {comp_name!r}: a {type(self).__name__} has no "
                              f"{pol!r} view. Its views are {self.legal_pols!r}.")
         self.comp_name = comp_name
         self.pol = pol
-        self.cfg = read_settings(params, "params", (f"components.{comp_name}",), self.DEFAULTS)
+        # The component's `params` block of the parameter file, with the `DEFAULTS` filled in.
+        self.cfg: Bunch = read_settings(params, "params", (f"components.{comp_name}",),
+                                        self.DEFAULTS)
         # `init_from: null` and a left-out `init_from` mean different things (see
         # `load_initial_state`), and `self.cfg` holds None for both.
         self.has_init_from = "init_from" in params.components[comp_name].params
         self.double_precision = resolve_param(params, "double_precision", ("compsep",),
                                               default=False, legal_types=bool)
-        # The SED parameters are attributes, because a sampler can change them. They start at the
-        # values of the parameter file. SpinningDust and RadioSources have other names for theirs
-        # in the parameter file, and set them in their own `__init__`.
+        # The SED parameters are attributes, because a sampler can change them. SpinningDust sets
+        # its peak frequencies, which have other names in the file, in its own `__init__`.
         for name in self.sed_param_names:
             if name in self.cfg:
                 if self.cfg[name] is None:
                     raise ValueError(f"'components.{comp_name}.params.{name}' must be set.")
                 setattr(self, name, self._per_pol(self.cfg[name]))
-        # The amplitudes the CompSep solves for, as one array: alms of shape (npol, nalm) for a
-        # diffuse component, one value per source for point sources. The subclass allocates it.
+        # Alms of shape (npol, nalm) for a diffuse component, one value per source for point
+        # sources. Allocated by the subclass.
         self.amps = None
-        # FWHM beam of the component. If the CG solver was used, this will be 0, as it solves for
-        # deconvolved components. Only non-zero if the common-resolution per-pix solver was used.
+        # The beam the amplitudes carry: 0 after the CG, which solves for the deconvolved sky; the
+        # common resolution after the per-pixel solver.
         self.amp_fwhm_rad = 0.0
 
     def _per_pol(self, value):
@@ -107,11 +92,9 @@ class Component:
         joined.pol = joined.cfg.polarization
         joined.amps = np.concatenate((intensity_comp.amps, pol_comp.amps), axis=0)
 
-        # The joined view is deep-copied from the intensity view, so any SED or C(l)-prior parameter
-        # given per polarization (`nu_ref: [I, QU]` is common) would otherwise silently keep only
-        # the I value. Restore the [I, QU] pair, i.e. undo `_per_pol`, so the joined component still
-        # describes both views. Joined components are only used on output paths (chain writing, name
-        # and lmax reporting), never for SED or prior evaluation, which happen on the split views.
+        # The copy of the I view holds only the I value of a per-polarization parameter (such as
+        # `nu_ref: [I, QU]`). Restore the pair, so the joined component, which is used for output
+        # only, describes both views.
         for param_name in intensity_comp.sed_param_names + intensity_comp.Cl_prior_param_names:
             i_value, qu_value = getattr(intensity_comp, param_name), getattr(pol_comp, param_name)
             if not np.array_equal(i_value, qu_value):
@@ -130,50 +113,34 @@ class Component:
 
     @property
     def amp_prior_mean(self):
-        """The mean mu of the Gaussian prior on this component's amplitudes, or `None` if there is
-        no prior.
-
-        Defined on the base class, where it is always None; `DiffuseComponent` overrides it with a
-        mean that can be read from a sky map.
-        """
+        """The mean of the amplitude prior, or None for a zero mean (see `DiffuseComponent`)."""
         return None
 
     def write_chain(self, group: h5py.Group, band_frequencies: dict[str, float]) -> None:
-        """Write this component's sample into its chain group, `comps/<comp_name>/`.
+        """Write this component's sample to its chain group, `comps/<comp_name>/`.
 
-        Writes what every component shares; subclasses add their amplitudes. `band_frequencies`
-        maps each band name to its centre frequency in GHz, for the per-band mixing coefficients.
+        `band_frequencies` maps each band name to its frequency in GHz, for the mixing values.
         """
         group["comp_name"] = self.comp_name
-        # The beam these amplitudes carry, in arcmin. This is 0.0 if the CG compsep was used,
-        # as it solves for the intrinsic sky. However, if the per-pix compsep solver was used,
-        # the sky components are smoothed to this resolution.
         group["amp_fwhm_arcmin"] = np.degrees(self.amp_fwhm_rad)*60.0
-        # The SED parameters this component type declares (see `sed_param_names`), so the chain
-        # records the sampled spectral indices and everything else needed to evaluate the SED.
-        # `nu_ref` may be a per-polarization array, hence no float() cast. A parameter the
-        # component leaves unset (None) is not written.
+        # A per-polarization `nu_ref` is an array, hence no float(). An unset (None) parameter is
+        # not written.
         for param_name in self.sed_param_names:
             value = getattr(self, param_name)
             if value is not None:
                 group[f"sed/{param_name}"] = value
-        # The mixing "matrix", C3's mixmat_<comp>_<band>. C4 indices are scalar, so a
-        # component's whole mixing matrix at a band is the single number `get_sed(nu)`.
         for band_name, nu in band_frequencies.items():
             group[f"mixing/{band_name}"] = self.get_sed(nu)
         group["defined_pol"] = self.cfg.polarization
         group["eval_pol"] = self.pol
 
     def read_chain(self, group: h5py.Group, restore_beta: bool) -> None:
-        """Restore this component's sampled state from its chain group, as `write_chain` wrote it.
+        """Restore the sampled state from the chain group that `write_chain` wrote.
 
-        Only what a sampler changes is restored; fixed parameters keep their parameter-file value,
-        so an edit there takes effect in a run started from another run's chain. The group holds
-        the joined component (I and QU together), while `self` may be one polarization view.
-
-        This base version restores the amplitudes' beam, and `beta` when `restore_beta` is set
-        (the run samples this component's beta in an MCMC sampling group). Subclasses add their
-        amplitudes, and any other sampled state.
+        Fixed parameters keep their parameter-file value, so an edit there takes effect in a run
+        started from another run's chain. The group holds the joined component,
+        while `self` may be one polarization view. `beta` is restored only with `restore_beta`
+        (when the run samples it).
         """
         self.amp_fwhm_rad = np.radians(float(group["amp_fwhm_arcmin"][()])/60.0)
         if restore_beta:
@@ -186,20 +153,17 @@ class Component:
 
     def load_initial_state(self, chain_file: str | None, apply_init_from: bool,
                            restore_beta: bool) -> None:
-        """Set this component's starting state from a CompSep chain file or its own `init_from`.
+        """Set the starting state from `init_from`, or else from `chain_file`.
 
-        The source is the `init_from` parameter if `apply_init_from` is set and the component has
-        one, and `chain_file` otherwise. So `init_from: null` keeps the component at its
-        parameter-file initialization. The file type decides how it is read: a `.h5`/`.hd5` chain
-        file goes through `read_chain`, and a `.fits` sky map through `read_amps_from_map`. Without
-        a source, the component keeps its parameter-file values and zero amplitudes.
+        `init_from` is used if `apply_init_from` is set and the component has one, so
+        `init_from: null` keeps the parameter-file values and zero amplitudes. A `.h5`/`.hd5` file
+        is read as a chain, a `.fits` file as a sky map.
 
         Args:
             chain_file: The CompSep chain file this chain starts from, or None.
-            apply_init_from: False when `chain_file` is this chain's own saved state (on
-                `gibbs.chain_status: append`), which must win over the initial guesses.
-            restore_beta: True when the run samples this component's beta. A chain file then also
-                sets beta; otherwise beta keeps its parameter-file value.
+            apply_init_from: False when `chain_file` is this chain's own saved state
+                (`gibbs.chain_status: append`), which must win over `init_from`.
+            restore_beta: Also restore `beta` from a chain file (when the run samples it).
         """
         source = chain_file
         if apply_init_from and self.has_init_from:
@@ -226,17 +190,10 @@ class Component:
                          "diffuse (alm-based) components.")
 
     def load_amp_prior_mean(self) -> None:
-        """Read the mean of the amplitude prior from the `amp_prior_mean_map` parameter.
-
-        Only diffuse components have such a prior and such a parameter, so this does nothing.
-        """
+        """Read the mean of the amplitude prior. Only diffuse components have one."""
 
     def dot(self, other: "Component") -> float:
-        """The dot product of this component's amplitudes with those of `other`.
-
-        `other` must be the same view of the same component. The CG uses this through
-        `CompList.dot`. This is the plain dot product; `DiffuseComponent` has its own, for alms.
-        """
+        """The dot product of the amplitudes with those of `other`, the same view."""
         return float(arithmetic.dot(self.amps, other.amps))
 
     def bcast_amps(self, comm:MPI.Comm, root=0):
@@ -251,13 +208,11 @@ class Component:
         comm.Reduce(send, recv, op=MPI.SUM, root=root)
 
     def ireduce_amps(self, comm:MPI.Comm, root=0) -> MPI.Request:
-        """Start summing the component's amplitudes onto the root rank (non-blocking), and return
-        its request.
+        """Start summing the amplitudes onto the root rank, and return the request.
 
         The root must `Wait` on the request before it reads `amps`.
         """
-        # The non-blocking reduce works for arrays above 2 GB too: mpi4py >= 4 calls the MPI-4
-        # large-count routine (MPI_Ireduce_c). Only the non-blocking broadcast has a 2 GB problem
-        # (see `bcast_amps`).
+        # Unlike the non-blocking broadcast, this works above 2 GB: mpi4py >= 4 calls the MPI-4
+        # large-count MPI_Ireduce_c.
         send, recv = (MPI.IN_PLACE, self.amps) if comm.Get_rank() == root else (self.amps, None)
         return comm.Ireduce(send, recv, op=MPI.SUM, root=root)

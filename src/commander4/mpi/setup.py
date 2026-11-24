@@ -32,11 +32,20 @@ class WorldInfo:
 
 @dataclass(frozen=True)
 class TODInfo:
-    """The TOD communicator: every TOD rank. Also the band this rank works on, and its partners."""
+    """The TOD communicator: every TOD rank."""
     comm: MPI.Comm
     rank: int
     size: int
     num_threads: int
+
+
+@dataclass(frozen=True)
+class BandInfo:
+    """The band communicator: the TOD ranks of this rank's band. Also the band, and its partners."""
+    comm: MPI.Comm
+    rank: int
+    size: int
+    node_comm: MPI.Comm                  # The band's ranks on this physical node.
     experiment_name: str                 # The band this rank works on.
     band_name: str
     compsep_sender: int | None           # World rank that sends the band its sky.
@@ -44,24 +53,15 @@ class TODInfo:
 
 
 @dataclass(frozen=True)
-class BandInfo:
-    """The band communicator: the TOD ranks of this rank's band."""
-    comm: MPI.Comm
-    rank: int
-    size: int
-    node_comm: MPI.Comm                  # The band's ranks on this physical node.
-
-
-@dataclass(frozen=True)
 class CompSepInfo:
-    """The CompSep communicator: every CompSep rank. Also the band this rank works on, and its
+    """The CompSep communicator: every CompSep rank. Also the polband this rank works on, and its
     partners."""
     comm: MPI.Comm
     rank: int
     size: int
     num_threads: int
-    subcomm: MPI.Comm                    # The CompSep ranks of this rank's polarization.
-    band_name: str                       # The band this rank works on,
+    pol_comm: MPI.Comm                   # The CompSep ranks of this rank's polarization.
+    band_name: str                       # The polband this rank works on: its band,
     pol: str                             # and its polarization, "I" or "QU".
     tod_sender: int | None               # World rank of the band's TOD master; None if none.
     tod_receiver: int | None             # Where this rank sends the sky; None if it does not.
@@ -90,7 +90,7 @@ def init_mpi(params: Bunch) -> MPIInfo:
     # are split between the bands below.
     tod_bands = enabled_tod_bands(params)
     compsep_polbands = enabled_compsep_polbands(params)
-    ntask_compsep = len(compsep_polbands)  # Compsep has 1 MPI rank per "effective" band (I and QU).
+    ntask_compsep = len(compsep_polbands)
     ntask_tod = world_size - ntask_compsep  # The remaining MPI ranks are all TOD ranks.
     if world_rank == 0:
         mpi4py_version = tuple(map(int, mpi4py.__version__.split('.')))
@@ -251,11 +251,11 @@ def init_mpi_tod(params: Bunch, tod_comm: MPI.Comm, num_threads: int, rank_count
     compsep_sender = compsep_receivers["I"] if "I" in compsep_receivers \
         else compsep_receivers.get("QU")
 
-    tod = TODInfo(comm=tod_comm, rank=tod_rank, size=tod_comm.Get_size(), num_threads=num_threads,
-                  experiment_name=my_band.experiment_name, band_name=my_band.band_name,
-                  compsep_sender=compsep_sender, compsep_receivers=compsep_receivers)
+    tod = TODInfo(comm=tod_comm, rank=tod_rank, size=tod_comm.Get_size(), num_threads=num_threads)
     band = BandInfo(comm=band_comm, rank=band_comm.Get_rank(), size=band_comm.Get_size(),
-                    node_comm=node_comm)
+                    node_comm=node_comm, experiment_name=my_band.experiment_name,
+                    band_name=my_band.band_name, compsep_sender=compsep_sender,
+                    compsep_receivers=compsep_receivers)
     return tod, band
 
 
@@ -277,11 +277,11 @@ def init_mpi_compsep(params: Bunch, compsep_comm: MPI.Comm, num_threads: int,
                            f"but that experiment has no enabled TOD band {polband.band_name!r}.")
     tod_sender = None if get_from == "file" else tod_masters[polband.band_name]
     sends_sky = polband.pol == "I" or "I" not in compsep_ranks[polband.band_name]
-    # `subcomm` holds all I polbands, or all QU polbands; the solver communicators of the
+    # `pol_comm` holds all I polbands, or all QU polbands; the solver communicators of the
     # amplitude groups are split from it.
     return CompSepInfo(comm=compsep_comm, rank=rank, size=compsep_comm.Get_size(),
                        num_threads=num_threads,
-                       subcomm=compsep_comm.Split(0 if polband.pol == "I" else 1, key=rank),
+                       pol_comm=compsep_comm.Split(0 if polband.pol == "I" else 1, key=rank),
                        band_name=polband.band_name, pol=polband.pol, tod_sender=tod_sender,
                        tod_receiver=tod_sender if sends_sky else None)
 

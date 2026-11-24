@@ -133,7 +133,7 @@ maps/cov           (6,npix)    # (opt) the 6 unique elements of P^T N^-1 P (II,I
 ```
 
 #### `chains_compsep/chain<CC>_iter<NNNN>.h5`
-One file per iteration holding every component, plus how well they fit the band maps. `<name>` is a component's key under `components` in the parameter file, `<view>` a `<band>_<I|QU>` pair.
+One file per iteration holding every component, plus how well they fit the band maps. `<name>` is a component's key under `components` in the parameter file, `<polband>` a `<band>_<I|QU>` pair.
 ```YAML
 comps/<name>/alms          (npol,nalm)  # complex amplitudes in uK_RJ at nu_ref (T/E/B rows)
 comps/<name>/source_amps   (1,nsrc)     # point-source components carry this instead of alms
@@ -147,16 +147,16 @@ comps/<name>/sed/<param>                # each SED parameter, including sampled 
 comps/<name>/Cl_prior/<param>           # the C(l) prior's model parameters; absent if the prior is off
 comps/<name>/mixing/<band> scalar       # this component's SED evaluated at that band
 
-chi2/total               scalar       # all-band sum of the whitened residual squared
-chi2/ndof                scalar       # observed pixels summed over all bands and polarizations
-chi2/reduced             scalar       # total / ndof
-chi2/z                   scalar       # (total - ndof) / sqrt(2 ndof); ~N(0,1) for a good fit
-chi2/bands/<view>/{chi2,ndof,reduced,nu}   # the same, per band and polarization
-chi2/map                 (3,npix)     # (opt) z^2 summed into output.chains.nside_chisq pixels
-residuals/<view>         (npol,npix)  # (opt) full-resolution data minus model
+chisq/total              scalar       # all-band sum of the whitened residual squared
+chisq/ndof               scalar       # observed pixels summed over all polbands
+chisq/reduced            scalar       # total / ndof
+chisq/z                  scalar       # (total - ndof) / sqrt(2 ndof); ~N(0,1) for a good fit
+chisq/bands/<polband>/{chisq,ndof,reduced,nu}   # the same, per polband
+chisq/map                (3,npix)     # (opt) chi^2 summed into output.chains.nside_chisq pixels
+residuals/<polband>      (npol,npix)  # (opt) full-resolution data minus model
 amplitude_groups/<group>/<I|QU>/{n_iter,cg_residuals}   # CG convergence, per polarization
 mcmc/<group>/{numstep,n_accept,accept_rate}             # Metropolis-Hastings acceptance
-mcmc/<group>/params/<comp>            # the accepted parameter value per component
+mcmc/<group>/betas/<comp>             # the final beta of each sampled component
 ```
 
 The chain files are also what a run restarts from. `gibbs.chain_status: append` continues the chains in `output.dir` after their newest complete iteration, and `gibbs.init_chain: "<dir>[:<iteration>]"` starts new chains from another run (Commander3's `CHAIN_STATUS` and `INIT_CHAIN`). Each class reads back its own sampled state: each TOD sampling step (`Gain`, `Noise`, `DataSelection`, `HFIModulation`) its part of a `chains_bands/` file, and each component's `read_chain` its amplitudes and sampled spectral parameters from a `chains_compsep/` file. Files are written under a `.tmp` name and renamed when complete, so a crash never leaves a half-written file under its final name. See [docs/chain_initialization.md](docs/chain_initialization.md).
@@ -192,7 +192,7 @@ src/commander4/
     component.py       #   Component base class; diffuse_components.py and point_sources.py are the families.
     comp_list.py       #   CompList: a list of components usable as a single vector by the CG driver.
 
-  data_models/         # The containers the two sides pass around (band TOD, band maps, pointing, samples).
+  data_models/         # The containers the two sides pass around (band TOD, band maps, pointing).
   file_io/             # Everything that touches disk: chain writing, map reading, and:
     experiments/       #   TOD readers: base_reader.py reads the standard scan files. Each other
                        #   module is named after an `experiment_id` and subclasses it.
@@ -215,9 +215,9 @@ and stored in `TODSamples`.
 
 ### 3.2 Output, logs and error handling
 
-Commander4 uses Python's logging system instead of `print`. A record has the form `time - rank - module - level - message`. Note that the `module` tells you what file the message came from. For example, the following message comes from `src/commander4/data_models/tod_samples.py` (the `src/commander4/` is implicit):
+Commander4 uses Python's logging system instead of `print`. A record has the form `time - rank - module - level - message`. Note that the `module` tells you what file the message came from. For example, the following message comes from `src/commander4/tod/samples.py` (the `src/commander4/` is implicit):
 ```bash
-16:32:06 - rank   1 - data_models.tod_samples - INFO - Band Band44GHz, chain 2: starting fresh Gibbs chain.
+16:32:06 - rank   1 - tod.samples - INFO - Band Band44GHz, chain 2: continuing from run/chains_bands/LFI_Band44GHz_chain02_iter0010.h5.
 ```
 
 The console handler writes to `stderr`, while the file handler writes to `<output_dir>/logs/run-<run-id>.log`. Console and file levels are configured independently under `output.logging`. Each level also includes every level below it in this table:

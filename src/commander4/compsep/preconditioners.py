@@ -1,21 +1,21 @@
-"""Preconditioners M ~ A^-1 for the component-separation CG solve.
+"""Preconditioners M ~ H^-1 for the component-separation CG solve H x = b.
 
 The choice of preconditioner is a class-name as a string in the parameter file.
-`JointPreconditioner` is the "proper" one, but the file also contains three "worse" ones,
+`JointPreconditioner` is the "proper" one, but the file also contains four "worse" ones,
 which can be used for testing.
 """
 import numpy as np
 import healpy as hp
 from mpi4py import MPI
 
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
 
 
 class NoPreconditioner:
     """No preconditioning: returns a copy of the input."""
-    def __init__(self, solver_comm: MPI.Comm, band_map: DetectorMap, comp_list: CompList):
+    def __init__(self, solver_comm: MPI.Comm, band_map: BandMap, comp_list: CompList):
         pass
 
     def __call__(self, comp_list: CompList):
@@ -25,13 +25,14 @@ class NoPreconditioner:
 class JointPreconditioner:
     """Block preconditioner for the component-separation CG system.
 
-    The CG solves with the left-hand side I + S^(1/2) A^T N^(-1) A S^(1/2), where A holds the
-    mixing matrix, the spherical-harmonic transforms and the beam of each band. This preconditioner
-    replaces each band's N^(-1) by one constant weight. The matrix is then the same for every m at
-    a given ell, and splits into one small dense block per ell, which couples the components (and,
-    for QU, the two polarization rows). The inverse of that block is the preconditioner:
+    The CG solves H x = b, with H = I + S^(1/2) A^T N^(-1) A S^(1/2), where A holds the mixing
+    matrix, the spherical-harmonic transforms and the beam of each band. This preconditioner
+    replaces each band's N^(-1) by one constant weight. H is then the same for every m at a given
+    ell, and splits into one small dense block per ell, which couples the components (and, for QU,
+    the two polarization rows). The inverse of that block is the preconditioner:
 
-        M_ell^(-1) ~= kron(I_pol, D_ell^(-2)) + sum_b B_b(ell)^2 kron(W_b, m_b m_b^T),
+        H_ell ~= D_ell (kron(I_pol, D_ell^(-2)) + K_ell) D_ell,
+        K_ell  = sum_b B_b(ell)^2 kron(W_b, m_b m_b^T),
 
     with D_ell the square roots of the components' C_l priors, B_b the beam of band b, W_b its
     polarization weight block and m_b its mixing vector. A band contributes only up to its own
@@ -52,7 +53,7 @@ class JointPreconditioner:
     # components were independent of each other.
     couple_components = True
 
-    def __init__(self, solver_comm: MPI.Comm, band_map: DetectorMap, comp_list: CompList):
+    def __init__(self, solver_comm: MPI.Comm, band_map: BandMap, comp_list: CompList):
         self.is_master = solver_comm.Get_rank() == 0
         self.ell_block_data = []
         self.npol = 0
@@ -135,8 +136,9 @@ class JointPreconditioner:
             active_prior_inv_sqrt = np.sqrt(active_prior_inv)
             block_prior_inv_sqrt = np.tile(active_prior_inv_sqrt, self.npol)
 
-            # The block is built as D_ell^(-1) A_ell D_ell^(-1) = D_ell^(-2) + K_ell instead of
-            # I + D_ell K_ell D_ell. It stays well-conditioned when the C_l prior (D_ell) is huge.
+            # The block is built as D_ell^(-1) H_ell D_ell^(-1) = D_ell^(-2) + K_ell instead of
+            # H_ell = I + D_ell K_ell D_ell. It stays well-conditioned when the C_l prior (D_ell)
+            # is huge.
             system_block = np.kron(np.eye(self.npol, dtype=np.float64),
                                    np.diag(active_prior_inv * has_prior[active_local]))
             for iband in range(nband):
@@ -215,7 +217,7 @@ class JointPreconditioner:
 
 
 class BeamOnlyPreconditioner(JointPreconditioner):
-    """`JointPreconditioner` with the beam alone: A ~ 1 + S^(1/2) B^T B S^(1/2)."""
+    """`JointPreconditioner` with the beam alone: H ~ 1 + S^(1/2) B^T B S^(1/2)."""
     include_beam = True
     include_noise = False
     include_mixing = False
@@ -223,7 +225,7 @@ class BeamOnlyPreconditioner(JointPreconditioner):
 
 
 class MixingMatrixPreconditioner(JointPreconditioner):
-    """`JointPreconditioner` with the mixing matrix alone: A ~ 1 + S^(1/2) M^T M S^(1/2).
+    """`JointPreconditioner` with the mixing matrix alone: H ~ 1 + S^(1/2) M^T M S^(1/2).
 
     It keeps the coupling between components, which is what makes the system ill-conditioned. Its
     only ell dependence is the C_l prior.
@@ -250,12 +252,12 @@ class DiagonalJointPreconditioner(JointPreconditioner):
 # `NoiseOnlyPreconditioner`: the diagonal of Y^T N^-1 Y, with its ell dependence from Wigner 3j
 # symbols. A starting point that does not run: it never reproduced the diagonal in testing, needs
 # `py3nj` (not a dependency), and is written for the solver before `CompList` (one component per
-# rank, `CompSepSolver` attributes that no longer exist, plain alm arrays). Its ell_3 = 0 term is
+# rank, attributes of the CG solver that no longer exist, plain alm arrays). Its ell_3 = 0 term is
 # the constant weight `JointPreconditioner` uses, so with constant noise a noise-only variant is
 # just `JointPreconditioner` with `include_noise` alone; this version adds the ell dependence.
 #
 # class NoiseOnlyPreconditioner:
-#     def __init__(self, solver: CompSepSolver):
+#     def __init__(self, solver: CGAmplitudeSolver):
 #         import py3nj
 #         self.solver = solver
 #         mycomp = solver.solver_comm.Get_rank()

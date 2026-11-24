@@ -464,9 +464,9 @@ def test_cmb_init_map_to_amplitude_converts_uK_CMB_at_nu_ref() -> None:
     assert np.allclose(out, expected)
 
 
-def test_spinning_dust_converts_its_units_at_nu_0(tmp_path) -> None:
-    """The parameter `nu_0` is the reference frequency (`nu_ref`) for the unit conversion, as for
-    every other component. A prior given in uK_CMB^2 then works too."""
+def test_spinning_dust_converts_its_units_at_nu_ref(tmp_path) -> None:
+    """`nu_ref` is the reference frequency for the unit conversion, as for every other component.
+    A prior given in uK_CMB^2 then works too."""
     import pysm3.units as pysm3u
     from commander4.sky import SpinningDust
 
@@ -474,7 +474,7 @@ def test_spinning_dust_converts_its_units_at_nu_0(tmp_path) -> None:
     np.savetxt(template, np.column_stack([np.logspace(0, 3, 50), np.ones(50)]))
     params = Bunch(polarization="I", 
                    Cl_prior_amplitude=100.0, lmax=4, units="uK_CMB", template_path=str(template),
-                   nu_peak=30.0, nu_0=22.0)
+                   nu_peak=30.0, nu_ref=22.0)
     ame = SpinningDust(_make_params(ame=Bunch(params=params)), "ame", "I")
 
     cmb_to_rj = (1*pysm3u.uK_CMB).to(pysm3u.uK_RJ,
@@ -484,13 +484,13 @@ def test_spinning_dust_converts_its_units_at_nu_0(tmp_path) -> None:
 
 
 def test_spinning_dust_rejects_a_reference_frequency_outside_its_template(tmp_path) -> None:
-    """The SED divides by the template at `nu_0`, which is zero outside the tabulated range."""
+    """The SED divides by the template at `nu_ref`, which is zero outside the tabulated range."""
     from commander4.sky import SpinningDust
 
     template = tmp_path / "spdust.dat"
     np.savetxt(template, np.column_stack([np.logspace(0, 2, 50), np.ones(50)]))  # 1-100 GHz.
     params = Bunch(polarization="I", lmax=4, template_path=str(template),
-                   nu_peak=30.0, nu_0=200.0)
+                   nu_peak=30.0, nu_ref=200.0)
     with pytest.raises(ValueError, match="outside the template range"):
         SpinningDust(_make_params(ame=Bunch(params=params)), "ame", "I")
 
@@ -622,7 +622,7 @@ def _write_radio_source_table(path, glon=0.0, glat=0.0, flux_mjy=1000.0, alpha=-
 
 def _make_radio_sources(template_path, nu_ref=30.0):
     from commander4.sky import RadioSources
-    cfg = Bunch(polarization="I", nu_0=nu_ref, template_path=str(template_path))
+    cfg = Bunch(polarization="I", nu_ref=nu_ref, template_path=str(template_path))
     return RadioSources(_make_params(radsources=Bunch(params=cfg)), "radsources", "I")
 
 

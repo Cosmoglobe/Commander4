@@ -48,7 +48,7 @@ def _pol_row_indices(data: NDArray, pol: str, comp_name: str, source_path: str):
 
 
 def _read_view_alms_from_fits(comp: DiffuseComponent, fits_path: str) -> NDArray | None:
-    """This view's alms from a FITS sky map (transformed), or None if its polarization isn't present.
+    """This view's alms from a FITS sky map, or None if the map lacks its polarization.
 
     The map's polarization content is inferred purely from its shape (npol, npix), so the column
     names do not matter. The map is converted from its ``units`` to the component's amplitude unit

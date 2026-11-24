@@ -171,7 +171,7 @@ FEATURES UNDER TEST, neither of which any other file here reaches:
     `compsep/perpix_solver.py`. It is the alternative to the global CG solve and is mutually
     exclusive with it, so `cg_sampling_groups` is empty below.
   * `compsep.common_res_fwhm`, the noise-weighted smoothing of every band to one beam, applied at
-    the data sources on read (`data_models/detector_map.py`). The per-pixel solver has no beam
+    the data sources on read (`data_models/band_map.py`). The per-pixel solver has no beam
     model at all, so without this it would silently mix resolutions.
 
 The two go together: the per-pixel solver is only correct once all bands share a beam. The shared

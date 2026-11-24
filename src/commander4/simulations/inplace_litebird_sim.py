@@ -202,7 +202,7 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetectorGroupTOD, b
                          params: Bunch, sim_params: Bunch) -> DetectorGroupTOD:
     nside = detector_data.nside
     npix = 12*nside**2
-    fwhm = np.deg2rad(detector_data.fwhm/60.0)
+    fwhm = np.deg2rad(detector_data.fwhm_arcmin/60.0)
     freq = detector_data.nu
     units = u.uK_RJ
 

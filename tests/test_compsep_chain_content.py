@@ -103,12 +103,12 @@ def test_mixing_coefficients_are_written_per_band(tmp_path) -> None:
 def test_the_diagnostics_tree_becomes_nested_groups(tmp_path) -> None:
     """The chi-squared, sampler stats and residuals land as groups, with `None` entries skipped."""
     diagnostics = {
-        "chi2": {"total": 100.0, "ndof": 90, "reduced": 100.0/90, "z": 0.745,
-                 "bands": {"Band30GHz_I": {"chi2": 60.0, "ndof": 50, "nu": 30.0},
-                           "Band44GHz_I": {"chi2": 40.0, "ndof": 40, "nu": 44.0}},
+        "chisq": {"total": 100.0, "ndof": 90, "reduced": 100.0/90, "z": 0.745,
+                 "bands": {"Band30GHz_I": {"chisq": 60.0, "ndof": 50, "nu": 30.0},
+                           "Band44GHz_I": {"chisq": 40.0, "ndof": 40, "nu": 44.0}},
                  "map": np.ones((3, 48), dtype=np.float32)},
         "mcmc": {"beta_group": {"numstep": 10, "n_accept": 4, "accept_rate": 0.4,
-                                "params": {"sync": -3.1}}},
+                                "betas": {"sync": -3.1}}},
         "amplitude_groups": {"amps": {"n_iter": 3, "cg_residuals": np.array([1.0, 0.1, 0.01])}},
         "nothing_here": None,
     }
@@ -116,13 +116,13 @@ def test_the_diagnostics_tree_becomes_nested_groups(tmp_path) -> None:
     path = _write(tmp_path, diagnostics=diagnostics)
 
     with h5py.File(path) as f:
-        assert f["chi2/total"][()] == pytest.approx(100.0)
-        assert f["chi2/bands/Band30GHz_I/chi2"][()] == pytest.approx(60.0)
-        assert f["chi2/map"].shape == (3, 48)
+        assert f["chisq/total"][()] == pytest.approx(100.0)
+        assert f["chisq/bands/Band30GHz_I/chisq"][()] == pytest.approx(60.0)
+        assert f["chisq/map"].shape == (3, 48)
         assert f["mcmc/beta_group/n_accept"][()] == 4
-        assert f["mcmc/beta_group/params/sync"][()] == pytest.approx(-3.1)
+        assert f["mcmc/beta_group/betas/sync"][()] == pytest.approx(-3.1)
         assert f["amplitude_groups/amps/cg_residuals"].shape == (3,)
         assert "nothing_here" not in f
         # The per-band terms must add up to the total the same file reports.
-        bands = f["chi2/bands"]
-        assert sum(bands[b]["chi2"][()] for b in bands) == pytest.approx(f["chi2/total"][()])
+        bands = f["chisq/bands"]
+        assert sum(bands[b]["chisq"][()] for b in bands) == pytest.approx(f["chisq/total"][()])

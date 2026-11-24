@@ -311,7 +311,7 @@ components:
     params:
       polarization: "I"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
-      nu_0: 30.0  # Ghz
+      nu_ref: 30.0  # Ghz
 
   sdust:
     enabled: False
@@ -321,7 +321,7 @@ components:
       Cl_prior_amplitude: null  # No amplitude prior.
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
       nu_peak: 25.3  # Ghz
-      nu_0: 22.0  # Ghz
+      nu_ref: 22.0  # Ghz
       lmax: 1000
 
 # ----------------------------------------

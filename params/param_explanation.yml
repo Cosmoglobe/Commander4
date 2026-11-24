@@ -103,7 +103,8 @@ output:
     maps_nside: "native"      # Resolution the maps/ group is written at. "native" keeps
                               # each band's own eval_nside; an integer downgrades to it.
     nside_chisq: 128          # Resolution of the CompSep chi^2 map (C3 NSIDE_CHISQ).
-                              # Default 256. Only used if chisq_map is on, below.
+                              # Default 256. Only used if chisq_map is on, below. Best at
+                              # or below the coarsest band nside.
 
     # Optional datasets. Each costs memory, disk, or both, so each is opt-in.
     include:
@@ -118,7 +119,7 @@ output:
       cov_maps: False             # maps/cov: the 6 unique elements of P^T N^-1 P, of
                                   # which only the inverse diagonal survives as maps/rms.
                                   # Six full-sky maps per band.
-      chisq_map: True             # chi2/map in the CompSep chain, at nside_chisq above
+      chisq_map: True             # chisq/map in the CompSep chain, at nside_chisq above
                                   # (C3 chisq_<postfix>.fits).
       compsep_residual_maps: False  # residuals/<band>_<pol>: full-resolution per-band
                                   # residuals (C3 res_<band>_<postfix>.fits). Gathers
@@ -312,12 +313,12 @@ compsep:
                               # TOD side runs against a static sky model.
 
   double_precision: false     # Work in float64/complex128 rather than float32/complex64.
-                              # Optional, false by default. It covers the component alms, the
-                              # band alms, DetectorMap.map_inv_var, the per-pixel solver's maps,
-                              # and the point-source amplitudes. Map precision is NOT separately
-                              # settable: the SHT returns a map in the precision of the alms it
-                              # was given, so alm and map space always match. False halves the
-                              # memory and is enough in practice.
+                              # Optional, false by default. It covers the alms of the diffuse
+                              # components, and the CG and per-pixel solvers, which work in the
+                              # precision of the components. The band
+                              # maps (sky and inverse variance) are always float32. False halves
+                              # the memory of the components on every CompSep rank and is enough
+                              # in practice.
 
   common_res_fwhm: 0          # [arcmin] Smooth every band -- signal AND rms, through the
                               # same kernel -- to one common resolution before solving,
@@ -619,7 +620,7 @@ components:
                               # The tabulated SED shape, as a two-column text file.
       nu_peak: 25.3           # [GHz] Frequency the tabulated spectrum peaks at; the table
                               # is shifted so its peak lands here.
-      nu_0: 22.0              # [GHz] Reference frequency of the amplitudes.
+      nu_ref: 22.0            # [GHz] Reference frequency of the amplitudes.
 
   # Point sources. Not a diffuse component: it carries per-source amplitudes rather than
   # alms, and is excluded from both solvers' preconditioners. Only partially supported --
@@ -631,7 +632,7 @@ components:
       polarization: "I"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
                               # The source catalogue: position and flux per source.
-      nu_0: 30.0              # [GHz] Reference frequency of the catalogue fluxes.
+      nu_ref: 30.0            # [GHz] Reference frequency of the catalogue fluxes.
 
 # ----------------------------------------
 # EXPERIMENTS

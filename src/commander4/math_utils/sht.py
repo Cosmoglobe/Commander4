@@ -122,18 +122,18 @@ def pseudo_alm_to_map_inverse(map: NDArray, nside: int, lmax: int, *, spin: int=
     
     Parameters
     ----------
-    map: numpy.ndarray(([ncomp,] 12*nside**2), dtype=numpy.float32 or numpy.float64
+    map: numpy.ndarray(([npol,] 12*nside**2), dtype=numpy.float32 or numpy.float64
     nside: int
         nside parameter of the Healpix map
     lmax: int >= 0
         the maximum l moment of the transform (inclusive).
     spin: int >= 0
         the spin to use for the transform.
-        If spin==0, ncomp must be 1, otherwise 2
+        If spin==0, npol must be 1, otherwise 2
     nthreads: None or int >= 0
         the number of threads to use for the computation. Defaults to `None`, which yields to the
         number specified in OMP_NUM_THREADS. nthreads=0 uses all threads on the system
-    out: None or numpy.ndarray([ncomp,] (lmax+1)*(lmax+2)//2),
+    out: None or numpy.ndarray([npol,] (lmax+1)*(lmax+2)//2),
          dtype=numpy.complex of same precision as `map`)
         the set of spherical harmonic coefficients.
         if `None`, a new suitable array is allocated
@@ -144,7 +144,7 @@ def pseudo_alm_to_map_inverse(map: NDArray, nside: int, lmax: int, *, spin: int=
     
     Returns
     -------
-    numpy.ndarray(([ncomp,] (lmax+1)*(lmax+2)//2), dtype=numpy.complex of same accuracy as `map`)
+    numpy.ndarray(([npol,] (lmax+1)*(lmax+2)//2), dtype=numpy.complex of same accuracy as `map`)
         the set of spherical harmonic coefficients.
         If `out` was supplied, this will be the same object
     

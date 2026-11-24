@@ -40,7 +40,30 @@ def _gain_step(global_blocks: dict | None = None, band_blocks: dict | None = Non
     params = Bunch(tod_processing=Bunch(**(global_blocks or {})),
                    experiments=Bunch(EXP=Bunch(bands=Bunch(BAND=Bunch(**(band_blocks or {}))))))
     return Gain(experiment, params, params.experiments.EXP.bands.BAND,
-                SimpleNamespace(Get_rank=lambda: rank), chain)
+                SimpleNamespace(Get_rank=lambda: rank, allreduce=lambda value: value), chain)
+
+
+def test_the_initial_gain_split_uses_the_whole_band():
+    """The absolute and relative gains are means over the detector-scans of all ranks, so every
+    rank starts from the same ones. The temporal gain keeps the rest."""
+    # This rank has one scan with gains 1 (d0) and 3 (d1). The other rank has one scan, with only
+    # d0 present, at gain 7. Its per-detector sums and counts arrive through `allreduce`.
+    dets = [SimpleNamespace(name=name, det_idx_fullband=idet, init_scalars=[gain])
+            for idet, (name, gain) in enumerate((("d0", 1.0), ("d1", 3.0)))]
+    experiment = SimpleNamespace(experiment_name="EXP", band_name="BAND", nu=100.0, nscans=1,
+                                 ndet=2, band_unit_factor=1.0,
+                                 iter_detector_scans=lambda: iter([(0, det) for det in dets]))
+    other_rank = iter([np.array([7.0, 0.0]), np.array([1, 0])])
+    band_comm = SimpleNamespace(Get_rank=lambda: 0,
+                                allreduce=lambda value: value + next(other_rank))
+    params = Bunch(tod_processing=Bunch(), experiments=Bunch(EXP=Bunch(bands=Bunch(BAND=Bunch(
+        detectors=Bunch(d0=Bunch(), d1=Bunch()))))))
+
+    gain = Gain(experiment, params, params.experiments.EXP.bands.BAND, band_comm, chain=1)
+
+    assert gain.abs_gain == pytest.approx(11/3)
+    np.testing.assert_allclose(gain.rel_gain, [4 - 11/3, 3 - 11/3])
+    np.testing.assert_allclose(gain.temporal_gain, [[1 - 4, 0.0]], atol=1e-12)
 
 
 @pytest.mark.parametrize("sampler_name", ["sample_absolute", "sample_relative", "sample_temporal"])

@@ -12,7 +12,7 @@ import os
 from copy import deepcopy
 from pixell.bunch import Bunch
 
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.mpi.setup import MPIInfo
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
@@ -61,7 +61,7 @@ def read_sampling_groups(params: Bunch, mpi_info: MPIInfo | None = None) \
 def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
     """Report component multipoles that no band can constrain.
 
-    `Component.comp2band` truncates a component to the band's lmax, so a component
+    `comp2band` truncates a component to the band's lmax, so a component
     multipole above *every* enabled band's lmax never meets the data. In a constrained realization
     (`optimize: false`) the CG solver then draws it straight from the C(l) prior, which is usually
     set orders of magnitude above the true signal, so the amplitudes come back dominated by prior
@@ -113,7 +113,7 @@ def init_compsep_processing(mpi_info: MPIInfo, params: Bunch, start: ChainStart)
     -> tuple[dict[int, CompList], list[AmplitudeGroup], list[MCMCGroup]]:
     """Build the components and the sampling groups, on one CompSep rank.
 
-    Each CompSep rank works on one band in one polarization (`mpi_info.compsep.band_name`, `.pol`).
+    Each CompSep rank works on one polband (`mpi_info.compsep.band_name`, `.pol`).
 
     Returns:
         comp_lists_by_chain: Each chain's full component list, with polarized components split
@@ -160,7 +160,7 @@ def init_compsep_processing(mpi_info: MPIInfo, params: Bunch, start: ChainStart)
 
 
 def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[AmplitudeGroup],
-                    mcmc_groups: list[MCMCGroup], band_map: DetectorMap, comp_list: CompList,
+                    mcmc_groups: list[MCMCGroup], band_map: BandMap, comp_list: CompList,
                     chain: int, iteration: int, rng: np.random.Generator) -> None:
     """One Gibbs iteration of component separation. Every CompSep rank calls it.
 
@@ -184,21 +184,21 @@ def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[Amp
     # again, so that the chain holds amplitudes solved at the final spectral parameters.
     for group in amplitude_groups:
         with benchmark(f"amp-{group.name}"):
-            stats = sample_amplitudes(mpi_info, params, group, band_map, comp_list, rng)
+            stats = sample_amplitudes(mpi_info, group, band_map, comp_list, rng)
         if stats:  # Empty for a per-pixel group, and for a group with nothing to solve.
             amplitude_stats[group.name] = stats
         log_fit(mpi_info, band_map, comp_list, label=f"{group.solver} group {group.name!r}")
 
     for group in mcmc_groups:
         with benchmark(f"mcmc-{group.name}"):
-            mcmc_stats[group.name] = sample_spectral_params(mpi_info, params, group, band_map,
-                                                            comp_list, rng)
+            mcmc_stats[group.name] = sample_spectral_params(mpi_info, group, band_map, comp_list,
+                                                            rng)
         log_fit(mpi_info, band_map, comp_list, label=f"MCMC group {group.name!r}")
 
     if mcmc_groups:  # If any MCMC group ran.
         for group in amplitude_groups:
             with benchmark(f"amp-{group.name}"):
-                stats = sample_amplitudes(mpi_info, params, group, band_map, comp_list, rng)
+                stats = sample_amplitudes(mpi_info, group, band_map, comp_list, rng)
             if stats:
                 amplitude_stats[group.name] = stats
             log_fit(mpi_info, band_map, comp_list, label=f"{group.solver} group {group.name!r}")
@@ -214,9 +214,10 @@ def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[Amp
             diagnostics["mcmc"] = mcmc_stats
         write_compsep_chain_to_file(comp_list, params, chain, iteration, diagnostics,
                                     band_frequencies)
-        chi2 = fit_tree["chi2"]
-        logger.summary(f"Chain {chain}, iteration {iteration} complete: chi2={chi2['total']:.6e}, "
-                       f"ndof={chi2['ndof']}, red.chi2={chi2['reduced']:.4f}, z={chi2['z']:.3f}.")
+        chisq = fit_tree["chisq"]
+        logger.summary(f"Chain {chain}, iteration {iteration} complete: "
+                       f"chisq={chisq['total']:.6e}, ndof={chisq['ndof']}, "
+                       f"red.chisq={chisq['reduced']:.4f}, z={chisq['z']:.3f}.")
 
     with benchmark("end-barrier"):
         compsep.comm.Barrier()

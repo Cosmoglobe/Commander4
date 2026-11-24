@@ -103,7 +103,7 @@ def test_tod_context_has_no_detector_hierarchy() -> None:
 
     tod, band = init_mpi_tod(params, MPI.COMM_SELF, 1, [1], {})
 
-    assert (tod.experiment_name, tod.band_name) == ("Experiment", "Band")
+    assert (band.experiment_name, band.band_name) == ("Experiment", "Band")
     assert band.comm.Get_size() == 1
     assert not hasattr(tod, "det") and not hasattr(band, "det_id")
 
@@ -136,13 +136,14 @@ COMPSEP_RANKS = {"BandA": {"I": 2, "QU": 4}, "FileBand": {"I": 3}, "BandB": {"QU
 
 
 def test_a_tod_band_gets_its_sky_from_its_i_polband_and_sends_each_map_to_its_polband() -> None:
-    tod, _ = init_mpi_tod(_params(), MPI.COMM_SELF, 1, [1, 1], COMPSEP_RANKS)
-    assert (tod.band_name, tod.compsep_sender, tod.compsep_receivers) \
+    _, band = init_mpi_tod(_params(), MPI.COMM_SELF, 1, [1, 1], COMPSEP_RANKS)
+    assert (band.band_name, band.compsep_sender, band.compsep_receivers) \
         == ("BandA", 2, {"I": 2, "QU": 4})
     # A band without an I polband gets its sky from its QU polband. (With no ranks for BandA, the
     # one rank is in BandB.)
-    tod, _ = init_mpi_tod(_params(), MPI.COMM_SELF, 1, [0, 1], COMPSEP_RANKS)
-    assert (tod.band_name, tod.compsep_sender, tod.compsep_receivers) == ("BandB", 5, {"QU": 5})
+    _, band = init_mpi_tod(_params(), MPI.COMM_SELF, 1, [0, 1], COMPSEP_RANKS)
+    assert (band.band_name, band.compsep_sender, band.compsep_receivers) \
+        == ("BandB", 5, {"QU": 5})
 
 
 def test_a_tod_band_without_a_compsep_entry_is_rejected_at_start_up() -> None:
@@ -159,7 +160,7 @@ def test_a_tod_band_without_a_compsep_entry_is_rejected_at_start_up() -> None:
 def test_a_compsep_rank_knows_its_tod_partners(rank: int, band_name: str, pol: str,
                                                tod_sender: int | None,
                                                tod_receiver: int | None) -> None:
-    # A stand-in for CompSep rank `rank` of four; its `Split` result (`subcomm`) is not used here.
+    # A stand-in for CompSep rank `rank` of four; its `Split` result (`pol_comm`) is not used here.
     compsep_comm = SimpleNamespace(Get_rank=lambda: rank, Get_size=lambda: 4,
                                    Split=lambda color, key: None)
 
@@ -196,7 +197,7 @@ def test_four_rank_layout_keeps_experiment_bands_in_separate_communicators() -> 
 
     expected_band = "BandA" if world_rank < 2 else "BandB"
     assert mpi_info.world.side == "tod"
-    assert mpi_info.tod.band_name == expected_band
+    assert mpi_info.band.band_name == expected_band
     assert mpi_info.band.size == 2
     assert mpi_info.band.rank == world_rank % 2
     assert not hasattr(mpi_info, "det")

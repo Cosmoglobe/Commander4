@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from pixell.bunch import Bunch
 
-from commander4.data_models.tod_samples import TODSamples
+from commander4.tod.samples import TODSamples
 from commander4.file_io import paths
 from commander4.tod.data_selection import DataSelection
 from commander4.tod.gain import Gain

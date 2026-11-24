@@ -13,7 +13,7 @@ from pixell.bunch import Bunch
 
 from commander4.compsep.amplitude_sampling import AmplitudeGroup
 from commander4.compsep.spectral_sampling import MCMCGroup, sample_spectral_params
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.sky.comp_list import CompList
 
 NSIDE, LMAX, NU, TRUE_BETA = 4, 8, 60.0, -3.0
@@ -50,13 +50,13 @@ def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
     comp_list[0].amps[:] = 1.0  # The I view. Real alms, so they are valid at m = 0 too.
 
     npix = 12*NSIDE**2
-    band_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1.0e4), nu=NU, fwhm=0.0,
-                           nside=NSIDE, double_precision=True, lmax=LMAX)
+    band_map = BandMap(np.zeros((1, npix)), np.full((1, npix), 1.0e4), nu=NU, fwhm_arcmin=0.0,
+                       nside=NSIDE, lmax=LMAX)
     band_map.map_sky = comp_list.get_sky_at_band(band_map).astype(np.float64)
     for comp in comp_list:
         comp.beta = start_beta
 
-    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, subcomm=MPI.COMM_SELF, rank=0,
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, pol_comm=MPI.COMM_SELF, rank=0,
                                    num_threads=1, band_name="Band60", pol="I"))
     # The one rank solves the I view; no rank holds a QU band.
     amp_group = AmplitudeGroup.init_from_params(params, "per_pixel_sampling_groups", "amps",
@@ -71,7 +71,7 @@ def test_a_proposal_out_of_bounds_is_rejected_without_a_solve():
     # A step that reached the amplitude solve would fail on this stand-in for a group.
     group.update_amplitude_groups = [None]
 
-    stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
+    stats = sample_spectral_params(mpi_info, group, band_map, comp_list,
                                    _fixed_rng([-1.0]))
 
     assert stats["n_accept"] == 0
@@ -81,19 +81,19 @@ def test_a_proposal_out_of_bounds_is_rejected_without_a_solve():
 def test_a_better_fit_is_accepted_on_both_views_of_the_component():
     mpi_info, params, group, amp_group, band_map, comp_list = _make_setup(start_beta=-2.8)
 
-    stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
+    stats = sample_spectral_params(mpi_info, group, band_map, comp_list,
                                    _fixed_rng([TRUE_BETA]))
 
     assert [comp.pol for comp in comp_list] == ["I", "QU"]
     assert [comp.beta for comp in comp_list] == [TRUE_BETA, TRUE_BETA]
     assert stats == {"numstep": 1, "n_accept": 1, "accept_rate": 1.0,
-                     "params": {"sync": TRUE_BETA}}
+                     "betas": {"sync": TRUE_BETA}}
 
 
 def test_a_worse_fit_is_rejected_and_beta_is_restored():
     mpi_info, params, group, amp_group, band_map, comp_list = _make_setup()
 
-    stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
+    stats = sample_spectral_params(mpi_info, group, band_map, comp_list,
                                    _fixed_rng([-2.8]))
 
     assert stats["n_accept"] == 0
@@ -106,7 +106,7 @@ def test_a_step_starts_from_the_state_the_previous_step_left():
     mpi_info, params, group, amp_group, band_map, comp_list = _make_setup(start_beta=-2.8)
     group.cfg.numstep = 2
 
-    stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
+    stats = sample_spectral_params(mpi_info, group, band_map, comp_list,
                                    _fixed_rng([TRUE_BETA, -2.9]))
 
     assert stats["n_accept"] == 1
@@ -122,7 +122,7 @@ def test_the_gaussian_prior_enters_the_decision(proposal: float, accepted: bool)
         prior_mean=TRUE_BETA, prior_rms=0.1)
     group.cfg.chisq_bands = []
 
-    stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
+    stats = sample_spectral_params(mpi_info, group, band_map, comp_list,
                                    _fixed_rng([proposal]))
 
     assert stats["n_accept"] == int(accepted)
@@ -134,7 +134,7 @@ def test_an_accepted_step_keeps_the_resolved_amplitudes():
     group.update_amplitude_groups = [amp_group]
     start_amps = comp_list[0].amps.copy()
 
-    stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
+    stats = sample_spectral_params(mpi_info, group, band_map, comp_list,
                                    _fixed_rng([TRUE_BETA]))
 
     assert stats["n_accept"] == 1
@@ -149,7 +149,7 @@ def test_a_rejected_step_restores_the_amplitudes_after_the_resolve():
     group.update_amplitude_groups = [amp_group]
     start_amps = comp_list[0].amps.copy()
 
-    stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
+    stats = sample_spectral_params(mpi_info, group, band_map, comp_list,
                                    _fixed_rng([TRUE_BETA]))
 
     assert stats["n_accept"] == 0

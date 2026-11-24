@@ -29,7 +29,7 @@ from commander4.math_utils.cg_driver import DistributedCG
 from commander4.tod.mapmaking.preconditioners import InvNPreconditionerI,\
     BlockInvNPreconditionerIQU
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
-from commander4.data_models.tod_samples import TODSamples
+from commander4.tod.samples import TODSamples
 from commander4.math_utils.arithmetic import inplace_scale, dot, norm
 from commander4.math_utils.fft import forward_rfft, backward_rfft
 from commander4.math_utils.transfer_func import SinglePole
@@ -75,9 +75,8 @@ class CGMapmaker:
         # Bolometer transfer function T(f)
         self.TF = detector_tod.tf
         self.W_mat = W_mat
-        # Native sampling rate [Hz] of the mapmaking TODs, so the transfer function T_omega(omega) is
-        # evaluated on a physical-frequency grid (a `tau` in seconds means seconds, not samples). The
-        # CG's own noise model is white, so unlike apply_N_inv this rate is only needed for apply_T.
+        # Native sampling rate [Hz], so the transfer function T_omega is evaluated on a physical
+        # frequency grid (a `tau` in seconds means seconds, not samples).
         self.fsamp = detector_tod.fsamp
         self.CG_maxiter = params.tod_processing.cg_mapmaker.max_iter
         self.CG_tol = params.tod_processing.cg_mapmaker.err_tol
@@ -344,12 +343,13 @@ class CGMapmaker:
         ismaster = self.map_comm.Get_rank() == 0
         # Only the master runs the CG arithmetic, so only it needs the preconditioner.
         if ismaster:
-            M = (BlockInvNPreconditionerIQU(map_cov) if self._ncomp == 3
-                 else InvNPreconditionerI(map_cov))
+            precond = (BlockInvNPreconditionerIQU(map_cov) if self._ncomp == 3
+                       else InvNPreconditionerI(map_cov))
         else:
-            M = None
+            precond = None
 
-        CG_solver = DistributedCG(self.apply_LHS, RHS_map, ismaster, M=M, destroy_b=True)
+        CG_solver = DistributedCG(self.apply_LHS, RHS_map, ismaster, precond=precond,
+                                  destroy_b=True)
 
         # Every collective below has to be entered by all ranks, so the two conditions guarding one
         # are made rank-independent up front: the iteration index already is, and whether a true

@@ -8,6 +8,7 @@ for its weights and the aux maps, but solves the sky map iteratively after the l
 the right-hand side it adds up during the loop. Both use only the good samples: the binned maps
 leave the flagged ones out, and the CG gives them zero weight.
 """
+import logging
 import time
 
 import numpy as np
@@ -15,8 +16,8 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
-from commander4.data_models.detector_map import DetectorMap
-from commander4.data_models.tod_samples import TODSamples
+from commander4.data_models.band_map import BandMap
+from commander4.tod.samples import TODSamples
 from commander4.diagnostics.performance import benchmark, log_memory
 from commander4.parameters.schema import resolve_param
 from commander4.tod.mapmaking.binned import BinnedMapmaker
@@ -24,11 +25,13 @@ from commander4.tod.mapmaking.cg import CGMapmaker
 from commander4.tod.mapmaking.output import finalize_band_maps
 from commander4.tod.view import TODView
 
+logger = logging.getLogger(__name__)
+
 
 @benchmark("mapmaker")
 def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_output: NDArray,
             iteration: int, params: Bunch,
-            rng: np.random.Generator) -> tuple[dict[str, DetectorMap], dict[str, NDArray]]:
+            rng: np.random.Generator) -> tuple[dict[str, BandMap], dict[str, NDArray]]:
     """Make the band maps from the TOD with the binned or the CG mapmaker (collective).
 
     All ranks of the band's communicator hold TOD of the same band and build its maps together.
@@ -109,6 +112,10 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
         elif noise.cfg.sample_sigma0:
             # No correlated noise this iteration: estimate sigma0 alone.
             noise.sample_sigma0(view)
+        # Too few valid samples under the ncorr mask give sigma0 = inf. Reject it.
+        if not (np.isfinite(view.sigma0) and view.sigma0 > 0):
+            selection.accept[view.iscan, view.idet] = False
+            continue
 
         ### THE SKY TOD AND THE NOISE RESIDUAL, in detector units ###
         # TODO: Known bug with a bolometer transfer function T (`tf_tau_sec`). The data hold
@@ -172,14 +179,14 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
     log_memory("mapmaker")
 
     ### FINAL CLEANUP ON MASTER RANK ###
-    detmap_dict_out = {}
+    band_maps = {}
     maps_to_file = {}
     with benchmark("finalize"):
         if band_comm.Get_rank() == 0:
             # After this, binned.maps holds only the aux maps.
             map_signal = cg.solved_map if use_cg else binned.maps.pop("signal")
-            detmap_dict_out, maps_to_file = finalize_band_maps(
+            band_maps, maps_to_file = finalize_band_maps(
                 map_signal, binned.map_inv_var, experiment_data, params, binned.maps,
                 binned.map_nhit, binned.map_cov)
 
-    return detmap_dict_out, maps_to_file
+    return band_maps, maps_to_file

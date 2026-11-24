@@ -8,7 +8,7 @@ import pysm3.units as pysm3_u
 from pixell.bunch import Bunch
 
 from commander4.parameters.schema import resolve_param, resolve_band_lmax
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def retrieve_map_from_fits_file(band: Bunch, pol: str, maptype: str):
 
 
 
-def read_data_map_from_file(my_band: Bunch, pols: str, params: Bunch) -> DetectorMap:
+def read_data_map_from_file(my_band: Bunch, pols: str, params: Bunch) -> BandMap:
     """ Reads the map data for a given band from disk. Used for bands that do not have a TOD
         processing component. The map is smoothed to the common resolution on read (when enabled).
     Args:
@@ -119,7 +119,7 @@ def read_data_map_from_file(my_band: Bunch, pols: str, params: Bunch) -> Detecto
         pols (str): The Stokes maps to read: "I", "QU" or "IQU".
         params (Bunch): Full parameter file, for the common-resolution smoothing settings.
     Returns:
-        detector_map (DetectorMap): Object holding signal map and other relevant data (inverse
+        band_map (BandMap): Object holding signal map and other relevant data (inverse
             variance, nu...)
     """
     maps_sky = []
@@ -174,11 +174,11 @@ def read_data_map_from_file(my_band: Bunch, pols: str, params: Bunch) -> Detecto
         maps_inv_var.append(map_inv_var)
 
     lmax = resolve_band_lmax(params, my_band._name, None, nside)
-    detmap = DetectorMap(np.array(maps_sky), np.array(maps_inv_var), my_band.freq, my_band.fwhm,
-                         nside, lmax=lmax)
+    band_map = BandMap(np.array(maps_sky), np.array(maps_inv_var), my_band.freq, my_band.fwhm,
+                       nside, lmax=lmax)
     # Smooth to the common analysis resolution on read; 0 leaves the band at its native beam.
     common_res_fwhm = float(resolve_param(params, "common_res_fwhm", ("compsep",), default=0.0))
     if common_res_fwhm:
-        detmap.smooth_to_resolution(common_res_fwhm)
+        band_map.smooth_to_resolution(common_res_fwhm)
 
-    return detmap
+    return band_map

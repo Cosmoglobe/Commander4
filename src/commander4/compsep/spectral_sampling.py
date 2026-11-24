@@ -1,11 +1,6 @@
 """Metropolis sampling of the spectral indices (`beta`) of one MCMC sampling group.
 
-`sample_spectral_params` is the whole sampler: the proposal, the amplitude re-solve, the
-chi-squared and the accept/reject decision of each step.
-
-C3 has four more samplers with this same loop (band gains, template scales, tabulated SEDs; see
-`comm_mh_specind_mod.f90`). They differ only in which numbers are stepped. To add one of them
-here, make the lines marked "beta" below general. Do not copy the loop.
+The lines marked "beta" read or set `beta` on the components.
 """
 import logging
 from dataclasses import dataclass
@@ -17,7 +12,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.compsep.amplitude_sampling import AmplitudeGroup, sample_amplitudes
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.diagnostics.performance import benchmark
 from commander4.parameters.schema import names_or_all, read_settings
 from commander4.mpi.setup import MPIInfo
@@ -28,10 +23,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class MCMCGroup:
-    """One MCMC sampling group of the parameter file, set up for this CompSep rank.
-
-    `cfg` holds the relevant parameter file block. Other attributes are derived quantities.
-    """
+    """One MCMC sampling group of the parameter file, set up for this CompSep rank."""
     name: str
     cfg: Bunch                             # The group's block of the parameter file, with defaults
                                            # and "all" replaced by the names.
@@ -67,9 +59,7 @@ class MCMCGroup:
         cfg = read_settings(params, name, ("compsep.mcmc_sampling_groups",), cls.DEFAULTS)
         comp_names = [comp for comp in params.components if params.components[comp].enabled]
         band_names = [band for band in params.compsep.bands if params.compsep.bands[band].enabled]
-        # Each component and each of its parameters in `sample` gets its defaults. A new dict, so
-        # that the parameter file itself is left as it is. The components are stepped in the
-        # order of the block.
+        # `sample` with the defaults filled in. A new dict, so the parameter file is left as it is.
         if not cfg.sample:
             raise ValueError(f"'{section}.sample' must name the components to sample.")
         sample = {}
@@ -111,14 +101,10 @@ class MCMCGroup:
 def _read_chisq_mask(compsep_comm: MPI.Comm, path: str, nside: int) -> NDArray[np.bool_]:
     """The pixels at `nside` that an MCMC group's chi-squared mask keeps (True = kept).
 
-    This is C3's ``MCMC_SAMPLING_GROUP_CHISQ_MASK``: one mask per sampling group, applied to every
-    band in that group's chi-squared, restricting which sky the accept/reject decision sees. It is
-    deliberately *not* a per-band data mask: it does not enter the amplitude solve or the noise
-    model, only the MCMC likelihood.
-
-    The CompSep master reads the file and broadcasts it. As in C3's ``compute_chisq``, the mask is
-    brought to `nside` and thresholded at 0.5, so a coarse pixel is kept only if more than half of
-    it was. Only field 0 is read (as on the TOD side), so one mask applies to Q and U alike.
+    The mask (C3's `MCMC_SAMPLING_GROUP_CHISQ_MASK`) enters only the MCMC chi-squared, not the
+    amplitude solve. The CompSep master reads field 0 of the file and broadcasts it, so one mask
+    applies to Q and U alike. It is brought to `nside` and thresholded at 0.5, so a coarse pixel is
+    kept only if more than half of it was.
     """
     mask = None
     if compsep_comm.Get_rank() == 0:
@@ -131,50 +117,37 @@ def _read_chisq_mask(compsep_comm: MPI.Comm, path: str, nside: int) -> NDArray[n
 
 
 @benchmark("mcmc-loglike")
-def chi2_of_chisq_bands(mpi_info: MPIInfo, group: MCMCGroup, band_map: DetectorMap,
-                        comp_list: CompList) -> float:
-    """The chi-squared that an MCMC group judges a proposal by. Every CompSep rank calls it.
+def group_chisq(mpi_info: MPIInfo, group: MCMCGroup, band_map: BandMap,
+                comp_list: CompList) -> float:
+    """The chi-squared that an MCMC group judges a proposal by. Every CompSep rank must call it.
 
-    It is the sum of ((data - model)/sigma)^2 over the bands in `group.cfg.chisq_bands`, as C3's
-    ``compute_chisq``. The model is the sky of all components in `comp_list`, so the components
-    that the group does not sample enter it too. Only the pixels in `group.chisq_pixels` count
-    (those the group's `chisq_mask` keeps, set at start-up).
+    The sum of ((data - model)/sigma)^2 over the bands in `group.cfg.chisq_bands` and the pixels in
+    `group.chisq_pixels`. The model is the sky of all components, also those the group does not
+    sample.
     """
-    chi2 = 0.0
+    chisq = 0.0
     if mpi_info.compsep.band_name in group.cfg.chisq_bands:
         model_sky = comp_list.get_sky_at_band(band_map)
         pixels = group.chisq_pixels
         residual = band_map.map_sky[:, pixels] - model_sky[:, pixels]
         # An unobserved pixel has zero inverse variance, and adds nothing.
         whitened_residual = residual*np.sqrt(band_map.map_inv_var[:, pixels])
-        chi2 = float(np.sum(whitened_residual**2))
-    return float(mpi_info.compsep.comm.allreduce(chi2, op=MPI.SUM))
+        chisq = float(np.sum(whitened_residual**2))
+    return float(mpi_info.compsep.comm.allreduce(chisq, op=MPI.SUM))
 
 
-def sample_spectral_params(mpi_info: MPIInfo, params: Bunch, group: MCMCGroup,
-                           band_map: DetectorMap, comp_list: CompList,
-                           rng: np.random.Generator) -> dict:
-    """Metropolis steps on the spectral indices of one MCMC group. Every CompSep rank calls it.
+def sample_spectral_params(mpi_info: MPIInfo, group: MCMCGroup, band_map: BandMap,
+                           comp_list: CompList, rng: np.random.Generator) -> dict:
+    """Metropolis steps on the spectral indices of one MCMC group. Every CompSep rank must call it.
 
-    Each of the `group.cfg.numstep` steps proposes a new `beta` for all components of the group at
-    once, re-solves the amplitude groups in `group.update_amplitude_groups` (C3's
-    ``UPDATE_CG_GROUPS``), and accepts or rejects the step as a whole. A rejected step restores
-    the betas and all amplitudes. An accepted step keeps the re-solved amplitudes. (C3's
-    ``sample_specind_mh_pol`` solves them once more there, to get more CG iterations; here that is
-    left out on purpose.)
-
-    Args:
-        mpi_info: The MPI data of this rank (`compsep` and `band` are used).
-        params: The full parameter file, for the amplitude re-solves.
-        group: The group to sample.
-        band_map: This rank's band map.
-        comp_list: The full component list of the chain, updated in place.
-        rng: This rank's random generator. The master draws the proposals and the decisions from
-            it, and the amplitude re-solves draw from it too.
+    Each of the `numstep` steps proposes a new `beta` for all components of the group at once,
+    re-solves the amplitude groups in `update_amplitude_groups` (C3's `UPDATE_CG_GROUPS`), and
+    accepts or rejects the step as a whole. A rejection restores the betas and all amplitudes; an
+    acceptance keeps the re-solved amplitudes. `comp_list` is updated in place.
 
     Returns:
-        The acceptance record for the chain file (C3's ``nonlin-samples_*.dat``): the number of
-        steps taken and accepted, and the final beta of each sampled component, by its name.
+        The acceptance record for the chain file: the number of steps taken and accepted, and the
+        final beta of each sampled component, by its name.
     """
     compsep = mpi_info.compsep
     # The component objects of each sampled component: its I view and its QU view, which share
@@ -185,13 +158,14 @@ def sample_spectral_params(mpi_info: MPIInfo, params: Bunch, group: MCMCGroup,
     n_accept = 0
     for step in range(group.cfg.numstep):
         # The state before the step, for a rejection. All amplitudes are saved, because the
-        # re-solve below changes those of other components too. It must change nothing else.
+        # re-solve changes those of other components too. It must change nothing but amplitudes,
+        # or a rejection would not undo it.
         old_betas = {name: float(views[name][0].beta) for name in group.cfg.sample}  # beta
         old_amps = [comp.amps.copy() for comp in comp_list]
-        old_chi2 = chi2_of_chisq_bands(mpi_info, group, band_map, comp_list)
+        old_chisq = group_chisq(mpi_info, group, band_map, comp_list)
 
         # The master proposes a Gaussian step from the current value of each beta. A step that
-        # leaves the hard bounds of any beta is rejected at once, without a solve (C3's p_uni).
+        # leaves the hard bounds of any beta is rejected at once, without a solve.
         new_betas, in_bounds = None, True
         if compsep.rank == 0:
             new_betas = {name: float(rng.normal(old_betas[name], settings.beta.proposal_sigma))
@@ -212,13 +186,13 @@ def sample_spectral_params(mpi_info: MPIInfo, params: Bunch, group: MCMCGroup,
                 comp.beta = new_betas[name]  # beta
         with benchmark("mcmc-amp-resolve"):
             for amplitude_group in group.update_amplitude_groups:
-                sample_amplitudes(mpi_info, params, amplitude_group, band_map, comp_list, rng)
-        new_chi2 = chi2_of_chisq_bands(mpi_info, group, band_map, comp_list)
+                sample_amplitudes(mpi_info, amplitude_group, band_map, comp_list, rng)
+        new_chisq = group_chisq(mpi_info, group, band_map, comp_list)
 
         # The Metropolis rule: accept with probability min(1, P_new/P_old). The proposal is
-        # symmetric, so log(P_new/P_old) is the difference of -chi2/2 plus the difference of the
-        # log priors. A Gaussian prior is -0.5 ((beta - mean)/rms)^2 (C3's p_gauss); its
-        # normalization is the same before and after, and drops out.
+        # symmetric, so log(P_new/P_old) is the difference of -chi^2/2 plus the difference of the
+        # log priors. A Gaussian log prior is -0.5 ((beta - mean)/rms)^2; its normalization is the
+        # same before and after, and drops out.
         accept = None
         if compsep.rank == 0:
             old_log_prior, new_log_prior = 0.0, 0.0
@@ -227,12 +201,15 @@ def sample_spectral_params(mpi_info: MPIInfo, params: Bunch, group: MCMCGroup,
                 if prior_rms is not None:
                     old_log_prior += -0.5*((old_betas[name] - prior_mean)/prior_rms)**2
                     new_log_prior += -0.5*((new_betas[name] - prior_mean)/prior_rms)**2
-            log_accept = -0.5*(new_chi2 - old_chi2) + new_log_prior - old_log_prior
+            log_accept = -0.5*(new_chisq - old_chisq) + new_log_prior - old_log_prior
             accept = log_accept >= 0.0 or np.log(rng.random()) < log_accept
-            logger.info(f"MCMC step {step+1}/{group.cfg.numstep}: dchi2={new_chi2 - old_chi2:.3e} "
+            logger.info(f"MCMC step {step+1}/{group.cfg.numstep}: "
+                        f"dchisq={new_chisq - old_chisq:.3e} "
                         f"[{'ACCEPT' if accept else 'reject'}] ({old_betas} -> {new_betas}).")
         accept = compsep.comm.bcast(accept, root=0)
 
+        # An acceptance keeps the amplitudes the step was judged by. C3 (`sample_specind_mh_pol`)
+        # re-solves them once more here; C4 does not, on purpose.
         if accept:
             n_accept += 1
         else:
@@ -248,4 +225,4 @@ def sample_spectral_params(mpi_info: MPIInfo, params: Bunch, group: MCMCGroup,
     final_betas = {name: float(views[name][0].beta) for name in group.cfg.sample}
     return {"numstep": group.cfg.numstep, "n_accept": n_accept,
             "accept_rate": n_accept/group.cfg.numstep if group.cfg.numstep > 0 else float("nan"),
-            "params": final_betas}
+            "betas": final_betas}  # beta

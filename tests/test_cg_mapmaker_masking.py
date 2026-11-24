@@ -19,7 +19,7 @@ from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
-from commander4.data_models.tod_samples import TODSamples
+from commander4.tod.samples import TODSamples
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.tod.data_selection import DataSelection
 from commander4.tod.glitches.sampling import Glitches
@@ -50,9 +50,9 @@ def _build_band(pix: np.ndarray, bad_idx, nside: int, sigma0: float, pols: str,
         specific_proc_masks={}, flag=flag, bad_data_bitmask=_BITMASK,
     )
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
-    band = DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=nside, nu=0.0, fwhm=0.0,
-                       fsamp=fsamp, ndet=1, pols=pols, noise_model=noise_model,
-                       tf_tau_sec=tf_tau_sec)
+    band = DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=nside, nu=0.0,
+                            fwhm_arcmin=0.0, fsamp=fsamp, ndet=1, pols=pols,
+                            noise_model=noise_model, tf_tau_sec=tf_tau_sec)
     ts = TODSamples.__new__(TODSamples)
     ts.experiment_data, ts.band_comm = band, MPI.COMM_SELF
     ts.selection = make_step(DataSelection, 1, 1)

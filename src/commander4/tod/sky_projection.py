@@ -21,7 +21,7 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 logger = logging.getLogger(__name__)
 
 #TODO: Units should be handled in a more robust way.
-T_CMB = 2.725 * 1e6  # CMB temperature in uK_CMB units.
+T_CMB = 2.72548e6  # CMB temperature in uK_CMB, as in C3 and simgen.
 C = 299792458  # m/s (Speed of light)
 T_CMB_div_C = T_CMB / C
 # Precomputing the conversion factor from 1 uK_CMB to 1 uK_RJ

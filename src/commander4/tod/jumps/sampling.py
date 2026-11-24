@@ -22,7 +22,7 @@ from commander4.tod.step import ChainArrays, TODStep
 from commander4.tod.view import TODView
 
 if TYPE_CHECKING:
-    from commander4.data_models.tod_samples import TODSamples
+    from commander4.tod.samples import TODSamples
 
 logger = logging.getLogger(__name__)
 

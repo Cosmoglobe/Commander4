@@ -85,8 +85,7 @@ components:
     component_class: "SpinningDust"
     params:
       polarization: "I"
-      nu_ref: 22.8           # Template-map reference used by simgen; keep equal to nu_0.
-      nu_0: 22.8             # GHz; amplitude normalization used by the Commander4 SED.
+      nu_ref: 22.8           # GHz; reference of the template map and of the C4 SED.
       nu_peak: 25.3          # GHz; desired peak of the shifted SpDust2 spectrum.
       template_path: "/path/to/spdust2_cnm.dat"
       lmax: 191
