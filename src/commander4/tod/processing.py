@@ -45,8 +45,8 @@ def init_tod_processing(mpi_info: MPIInfo, params: Bunch, start: ChainStart) \
         experiment_data (DetectorGroupTOD): The TOD data for the band of this process.
         tod_samples_by_chain (dict[int, TODSamples]): Each chain's samples, by chain number.
     """
-    my_experiment = params.experiments[mpi_info.tod.experiment_name]
-    my_band = my_experiment.bands[mpi_info.tod.band_name]
+    my_experiment = params.experiments[mpi_info.band.experiment_name]
+    my_band = my_experiment.bands[mpi_info.band.band_name]
     band_comm = mpi_info.band.comm
 
     t0 = time.time()

@@ -375,7 +375,7 @@ def write_source_catalogue(output_dir: str, comp: SkyComponent, nside: int) -> N
 
     The format is the whitespace-separated table Commander4's `RadioSources.read_dat_to_bunch`
     expects: comment lines, of which the last one before the data names the columns. Point it at
-    with `template_path` and set the component's `nu_0` to the `nu_ref` recorded in the header.
+    with `template_path` and set the component's `nu_ref` to the one recorded in the header.
     """
     columns, table = comp.catalogue_table(nside)
     path = os.path.join(output_dir, f"catalogue_{comp.name}.dat")

@@ -55,7 +55,7 @@ output:
       hit_maps: True        # maps/nhit: per-pixel count of unflagged samples.
       cov_maps: True       # maps/cov: the 6 unique elements of P^T N^-1 P, of which only the
                             # inverse diagonal survives as maps/rms. Six full-sky float64 maps.
-      chisq_map: True       # chi2/map in the compsep chain (C3 chisq_<postfix>.fits).
+      chisq_map: True       # chisq/map in the compsep chain (C3 chisq_<postfix>.fits).
       compsep_residual_maps: True  # residuals/<band>_<pol>: full-resolution per-band residuals
                             # (C3 res_<band>_<postfix>.fits). Gathers every band map onto the
                             # compsep master, so it is memory-heavy.
@@ -176,7 +176,7 @@ components:
     params:
       polarization: "I"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
-      nu_0: 30.0  # Ghz
+      nu_ref: 30.0  # Ghz
 
   sdust:
     enabled: False
@@ -186,7 +186,7 @@ components:
       Cl_prior_amplitude: null  # No amplitude prior.
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
       nu_peak: 25.3  # Ghz
-      nu_0: 22.0  # Ghz
+      nu_ref: 22.0  # Ghz
       lmax: 1000
 
 # ----------------------------------------

@@ -14,7 +14,7 @@ from commander4.math_utils.alm import gaussian_random_alm
 from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
 from commander4.math_utils.cg_driver import DistributedCG
 from commander4.compsep import preconditioners
-from commander4.data_models.band_alms import BandAlms
+from commander4.data_models.band import Band
 from commander4.diagnostics.performance import benchmark, log_memory
 
 if TYPE_CHECKING:  # For the type hint only; a real import would be circular.
@@ -106,28 +106,28 @@ class CGAmplitudeSolver:
         # Each component adds itself to an empty band, in the components' precision: a diffuse
         # component to its alms, point sources to its pixel map.
         with benchmark("lhs-project"):
-            band_alms = BandAlms.init_from_band_map(self.band_map,
-                                                double_precision=comp_list[0].double_precision)
+            band = Band.init_from_band_map(self.band_map,
+                                           double_precision=comp_list[0].double_precision)
             for comp in comp_list:
-                comp.comp2band(band_alms, nthreads=self.nthreads)
+                comp.comp2band(band, nthreads=self.nthreads)
 
         # N^-1 [B M S^{1/2} a']
         with benchmark("lhs-inv-N"):
             band_map = self.band_map
-            pix_map = alm_to_map(band_alms.alms, band_map.nside, band_map.lmax, spin=band_map.spin,
+            pix_map = alm_to_map(band.alms, band_map.nside, band_map.lmax, spin=band_map.spin,
                                  nthreads=self.nthreads)
-            if band_alms.map is not None:
-                pix_map += band_alms.map
+            if band.map is not None:
+                pix_map += band.map
             band_map.apply_inv_N_map(pix_map)
-            if band_alms.map is not None:
-                band_alms.map = pix_map
-            band_alms.alms = alm_to_map_adjoint(pix_map, band_map.nside, band_map.lmax,
-                                                spin=band_map.spin, nthreads=self.nthreads)
+            if band.map is not None:
+                band.map = pix_map
+            band.alms = alm_to_map_adjoint(pix_map, band_map.nside, band_map.lmax,
+                                           spin=band_map.spin, nthreads=self.nthreads)
 
         # M^T B^T [N^-1 B M S^{1/2} a']
         with benchmark("lhs-eval"):
             for comp in comp_list:
-                comp.band2comp(band_alms, nthreads=self.nthreads)
+                comp.band2comp(band, nthreads=self.nthreads)
 
         # Accumulate the result on the master. The reduces are non-blocking, so the master can work
         # on each component as soon as it has arrived, while later ones are still on their way.
@@ -176,7 +176,7 @@ class CGAmplitudeSolver:
         # Y^T [N^-1 d + N^{-1/2} eta_1]
         b_alm = alm_to_map_adjoint(b_map, self.band_map.nside, self.band_map.lmax,
                                    spin=self.band_map.spin, nthreads=self.nthreads)
-        b_band = BandAlms.init_from_band_map(self.band_map,
+        b_band = Band.init_from_band_map(self.band_map,
                                          double_precision=comp_list[0].double_precision)
         b_band.alms[:] = b_alm
         # Point sources read the pixel map itself, as in the LHS.

@@ -11,7 +11,7 @@ the beam, or the mixing matrix -- nothing about the discretization needs to be d
 consequences are tested:
 
     E[<x - x_MAP, M (x - x_MAP)>] = tr(M^-1 M) = ndof,
-    <xbar - x_MAP, M (xbar - x_MAP)> ~ chi2(ndof)/nsamp.
+    <xbar - x_MAP, M (xbar - x_MAP)> ~ chi^2(ndof)/nsamp.
 
 Both are sensitive to the relative normalization of eta_1 and eta_2: an eta_2 drawn with twice the
 correct variance (the pre-2026-08 `gaussian_random_alm` bug) inflates the first by tr(M^-1)/ndof,
@@ -138,7 +138,7 @@ def test_constrained_realization_covariance_is_inverse_LHS(realizations):
         quad.append(delta.dot(solver.apply_LHS_matrix(delta)))
 
     mean = np.mean(quad)
-    # Each term is a sum of ndof chi2(1) variables, so the standard error is sqrt(2*ndof/NSAMP).
+    # Each term is a sum of ndof chi^2(1) variables, so the standard error is sqrt(2*ndof/NSAMP).
     stderr = np.sqrt(2.0*ndof/len(quad))
     assert abs(mean - ndof) < 4.0*stderr, f"E[<x,Mx>]={mean:.2f} vs ndof={ndof}"
 
@@ -153,9 +153,9 @@ def test_constrained_realization_mean_is_the_MAP_solution(realizations):
         mean_sample.add_scaled(sample, 1.0/len(samples))
     mean_sample.add_scaled(x_map, -1.0)
 
-    # <xbar-x_MAP, M(xbar-x_MAP)> is chi2(ndof)/NSAMP; allow a generous upper bound.
+    # <xbar-x_MAP, M(xbar-x_MAP)> is chi^2(ndof)/NSAMP; allow a generous upper bound.
     quad = mean_sample.dot(solver.apply_LHS_matrix(mean_sample))*len(samples)
-    assert quad < ndof + 5.0*np.sqrt(2.0*ndof), f"mean deviates from MAP: chi2={quad:.1f}"
+    assert quad < ndof + 5.0*np.sqrt(2.0*ndof), f"mean deviates from MAP: chisq={quad:.1f}"
 
 
 def test_optimize_controls_randomness():
@@ -264,7 +264,7 @@ def test_the_lhs_couples_a_diffuse_component_and_point_sources_symmetrically(tmp
     with open(tmp_path / "radio.dat", "w") as handle:
         handle.write("# Glon(deg) Glat(deg) I(mJy) alpha_I\n0.0 0.0 1.0 -0.7\n40.0 20.0 1.0 -0.5\n")
     params = _make_params()
-    source = Bunch(params=Bunch(polarization="I", nu_0=30.0,
+    source = Bunch(params=Bunch(polarization="I", nu_ref=30.0,
                                 template_path=str(tmp_path/"radio.dat")))
     source_params = Bunch(components=Bunch(radsources=source), compsep=params.compsep)
     rng = np.random.default_rng(0)

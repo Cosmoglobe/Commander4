@@ -54,7 +54,7 @@ def receive_compsep(mpi_info: MPIInfo, experiment_data: DetectorGroupTOD) -> Dis
     """
     comp_list = None
     if mpi_info.band.rank == 0:
-        comp_list = mpi_info.world.comm.recv(source=mpi_info.tod.compsep_sender)
+        comp_list = mpi_info.world.comm.recv(source=mpi_info.band.compsep_sender)
     return _realize_and_distribute_sky(comp_list, experiment_data, mpi_info.band.comm)
 
 
@@ -82,11 +82,11 @@ def send_tod(mpi_info: MPIInfo, band_maps: dict[str, BandMap]) -> None:
     """
     if mpi_info.band.rank == 0:
         for pol, band_map in band_maps.items():
-            if pol in mpi_info.tod.compsep_receivers:
-                mpi_info.world.comm.send(band_map, dest=mpi_info.tod.compsep_receivers[pol])
+            if pol in mpi_info.band.compsep_receivers:
+                mpi_info.world.comm.send(band_map, dest=mpi_info.band.compsep_receivers[pol])
             else:
                 logger.debug(f"Pol-{pol} TOD-processing result discarded because band "
-                             f"{mpi_info.tod.band_name} does not require it on the CompSep side.")
+                             f"{mpi_info.band.band_name} does not require it on the CompSep side.")
 
 
 ###########################################################

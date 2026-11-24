@@ -117,23 +117,23 @@ def _read_chisq_mask(compsep_comm: MPI.Comm, path: str, nside: int) -> NDArray[n
 
 
 @benchmark("mcmc-loglike")
-def chi2_of_chisq_bands(mpi_info: MPIInfo, group: MCMCGroup, band_map: BandMap,
-                        comp_list: CompList) -> float:
+def group_chisq(mpi_info: MPIInfo, group: MCMCGroup, band_map: BandMap,
+                comp_list: CompList) -> float:
     """The chi-squared that an MCMC group judges a proposal by. Every CompSep rank must call it.
 
     The sum of ((data - model)/sigma)^2 over the bands in `group.cfg.chisq_bands` and the pixels in
     `group.chisq_pixels`. The model is the sky of all components, also those the group does not
     sample.
     """
-    chi2 = 0.0
+    chisq = 0.0
     if mpi_info.compsep.band_name in group.cfg.chisq_bands:
         model_sky = comp_list.get_sky_at_band(band_map)
         pixels = group.chisq_pixels
         residual = band_map.map_sky[:, pixels] - model_sky[:, pixels]
         # An unobserved pixel has zero inverse variance, and adds nothing.
         whitened_residual = residual*np.sqrt(band_map.map_inv_var[:, pixels])
-        chi2 = float(np.sum(whitened_residual**2))
-    return float(mpi_info.compsep.comm.allreduce(chi2, op=MPI.SUM))
+        chisq = float(np.sum(whitened_residual**2))
+    return float(mpi_info.compsep.comm.allreduce(chisq, op=MPI.SUM))
 
 
 def sample_spectral_params(mpi_info: MPIInfo, group: MCMCGroup, band_map: BandMap,
@@ -162,7 +162,7 @@ def sample_spectral_params(mpi_info: MPIInfo, group: MCMCGroup, band_map: BandMa
         # or a rejection would not undo it.
         old_betas = {name: float(views[name][0].beta) for name in group.cfg.sample}  # beta
         old_amps = [comp.amps.copy() for comp in comp_list]
-        old_chi2 = chi2_of_chisq_bands(mpi_info, group, band_map, comp_list)
+        old_chisq = group_chisq(mpi_info, group, band_map, comp_list)
 
         # The master proposes a Gaussian step from the current value of each beta. A step that
         # leaves the hard bounds of any beta is rejected at once, without a solve.
@@ -187,10 +187,10 @@ def sample_spectral_params(mpi_info: MPIInfo, group: MCMCGroup, band_map: BandMa
         with benchmark("mcmc-amp-resolve"):
             for amplitude_group in group.update_amplitude_groups:
                 sample_amplitudes(mpi_info, amplitude_group, band_map, comp_list, rng)
-        new_chi2 = chi2_of_chisq_bands(mpi_info, group, band_map, comp_list)
+        new_chisq = group_chisq(mpi_info, group, band_map, comp_list)
 
         # The Metropolis rule: accept with probability min(1, P_new/P_old). The proposal is
-        # symmetric, so log(P_new/P_old) is the difference of -chi2/2 plus the difference of the
+        # symmetric, so log(P_new/P_old) is the difference of -chi^2/2 plus the difference of the
         # log priors. A Gaussian log prior is -0.5 ((beta - mean)/rms)^2; its normalization is the
         # same before and after, and drops out.
         accept = None
@@ -201,9 +201,10 @@ def sample_spectral_params(mpi_info: MPIInfo, group: MCMCGroup, band_map: BandMa
                 if prior_rms is not None:
                     old_log_prior += -0.5*((old_betas[name] - prior_mean)/prior_rms)**2
                     new_log_prior += -0.5*((new_betas[name] - prior_mean)/prior_rms)**2
-            log_accept = -0.5*(new_chi2 - old_chi2) + new_log_prior - old_log_prior
+            log_accept = -0.5*(new_chisq - old_chisq) + new_log_prior - old_log_prior
             accept = log_accept >= 0.0 or np.log(rng.random()) < log_accept
-            logger.info(f"MCMC step {step+1}/{group.cfg.numstep}: dchi2={new_chi2 - old_chi2:.3e} "
+            logger.info(f"MCMC step {step+1}/{group.cfg.numstep}: "
+                        f"dchisq={new_chisq - old_chisq:.3e} "
                         f"[{'ACCEPT' if accept else 'reject'}] ({old_betas} -> {new_betas}).")
         accept = compsep.comm.bcast(accept, root=0)
 
@@ -224,4 +225,4 @@ def sample_spectral_params(mpi_info: MPIInfo, group: MCMCGroup, band_map: BandMa
     final_betas = {name: float(views[name][0].beta) for name in group.cfg.sample}
     return {"numstep": group.cfg.numstep, "n_accept": n_accept,
             "accept_rate": n_accept/group.cfg.numstep if group.cfg.numstep > 0 else float("nan"),
-            "params": final_betas}
+            "betas": final_betas}  # beta

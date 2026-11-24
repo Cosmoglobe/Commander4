@@ -138,8 +138,8 @@ def test_joint_run(run_A: Path) -> None:
     # (nside 8, signal-to-noise ~250) guards the band lmax cut of the realized sky: a sky realized
     # above the band lmax gives it a reduced chi^2 of ~12000.
     sky = read_chain_file(run_A / "chains_compsep" / "chain01_iter0002.h5")
-    for view in ("Band030_I", "Band030_QU", "Band100_I", "Band100_QU", "Band353_I"):
-        assert 0.2 < sky[f"chi2/bands/{view}/reduced"] < 2.0, view
+    for polband in ("Band030_I", "Band030_QU", "Band100_I", "Band100_QU", "Band353_I"):
+        assert 0.2 < sky[f"chisq/bands/{polband}/reduced"] < 2.0, polband
     assert 1.0 <= sky["comps/dust/sed/beta"] <= 2.5
 
 
@@ -178,8 +178,8 @@ def test_compsep_only_run(run_A: Path, workdir: Path) -> None:
     assert_finite_chains(out_B)
     sky = read_chain_file(out_B / "chains_compsep" / "chain01_iter0002.h5")
     assert 1.0 <= sky["comps/dust/sed/beta"] <= 2.5
-    for view in ("Band030_I", "Band030_QU", "Band100_I", "Band100_QU", "Band353_I"):
-        assert 0.2 < sky[f"chi2/bands/{view}/reduced"] < 2.0, view
+    for polband in ("Band030_I", "Band030_QU", "Band100_I", "Band100_QU", "Band353_I"):
+        assert 0.2 < sky[f"chisq/bands/{polband}/reduced"] < 2.0, polband
 
 
 def test_tod_only_run(workdir: Path) -> None:

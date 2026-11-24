@@ -56,7 +56,7 @@ def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
     for comp in comp_list:
         comp.beta = start_beta
 
-    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, subcomm=MPI.COMM_SELF, rank=0,
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, pol_comm=MPI.COMM_SELF, rank=0,
                                    num_threads=1, band_name="Band60", pol="I"))
     # The one rank solves the I view; no rank holds a QU band.
     amp_group = AmplitudeGroup.init_from_params(params, "per_pixel_sampling_groups", "amps",
@@ -87,7 +87,7 @@ def test_a_better_fit_is_accepted_on_both_views_of_the_component():
     assert [comp.pol for comp in comp_list] == ["I", "QU"]
     assert [comp.beta for comp in comp_list] == [TRUE_BETA, TRUE_BETA]
     assert stats == {"numstep": 1, "n_accept": 1, "accept_rate": 1.0,
-                     "params": {"sync": TRUE_BETA}}
+                     "betas": {"sync": TRUE_BETA}}
 
 
 def test_a_worse_fit_is_rejected_and_beta_is_restored():

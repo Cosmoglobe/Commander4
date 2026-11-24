@@ -60,8 +60,8 @@ class Component:
         self.has_init_from = "init_from" in params.components[comp_name].params
         self.double_precision = resolve_param(params, "double_precision", ("compsep",),
                                               default=False, legal_types=bool)
-        # The SED parameters are attributes, because a sampler can change them. SpinningDust and
-        # RadioSources name theirs differently in the file, and set them in their own `__init__`.
+        # The SED parameters are attributes, because a sampler can change them. SpinningDust sets
+        # its peak frequencies, which have other names in the file, in its own `__init__`.
         for name in self.sed_param_names:
             if name in self.cfg:
                 if self.cfg[name] is None:

@@ -119,7 +119,7 @@ output:
       cov_maps: False             # maps/cov: the 6 unique elements of P^T N^-1 P, of
                                   # which only the inverse diagonal survives as maps/rms.
                                   # Six full-sky maps per band.
-      chisq_map: True             # chi2/map in the CompSep chain, at nside_chisq above
+      chisq_map: True             # chisq/map in the CompSep chain, at nside_chisq above
                                   # (C3 chisq_<postfix>.fits).
       compsep_residual_maps: False  # residuals/<band>_<pol>: full-resolution per-band
                                   # residuals (C3 res_<band>_<postfix>.fits). Gathers
@@ -620,7 +620,7 @@ components:
                               # The tabulated SED shape, as a two-column text file.
       nu_peak: 25.3           # [GHz] Frequency the tabulated spectrum peaks at; the table
                               # is shifted so its peak lands here.
-      nu_0: 22.0              # [GHz] Reference frequency of the amplitudes.
+      nu_ref: 22.0            # [GHz] Reference frequency of the amplitudes.
 
   # Point sources. Not a diffuse component: it carries per-source amplitudes rather than
   # alms, and is excluded from both solvers' preconditioners. Only partially supported --
@@ -632,7 +632,7 @@ components:
       polarization: "I"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
                               # The source catalogue: position and flux per source.
-      nu_0: 30.0              # [GHz] Reference frequency of the catalogue fluxes.
+      nu_ref: 30.0            # [GHz] Reference frequency of the catalogue fluxes.
 
 # ----------------------------------------
 # EXPERIMENTS

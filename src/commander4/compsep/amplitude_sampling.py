@@ -83,13 +83,13 @@ class AmplitudeGroup:
                             for comp in cfg.comps)
             solver_ranks[pol] = [rank for rank, polband in enumerate(polbands) if has_comps
                                  and polband.pol == pol and polband.band_name in cfg.bands]
-        # The communicator is split from `subcomm`, which holds the ranks of one polarization, so
+        # The communicator is split from `pol_comm`, which holds the ranks of one polarization, so
         # the I and QU parts of a group are two separate solves.
         solver_comm = None
         if mpi_info is not None:
             is_solver = mpi_info.compsep.rank in solver_ranks[mpi_info.compsep.pol]
-            solver_comm = mpi_info.compsep.subcomm.Split(0 if is_solver else MPI.UNDEFINED,
-                                                         key=mpi_info.compsep.rank)
+            solver_comm = mpi_info.compsep.pol_comm.Split(0 if is_solver else MPI.UNDEFINED,
+                                                          key=mpi_info.compsep.rank)
         return cls(name=name, solver=solver, cfg=cfg, solver_ranks=solver_ranks,
                    solver_comm=solver_comm)
 

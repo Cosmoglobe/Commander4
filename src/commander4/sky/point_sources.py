@@ -6,7 +6,7 @@ import numpy as np
 import pysm3.units as pysm3u
 from pixell.bunch import Bunch
 
-from commander4.data_models.band_alms import BandAlms
+from commander4.data_models.band import Band
 from commander4.sky.component import Component
 from commander4.sky.beams import gauss_beam, get_gauss_beam_radius
 
@@ -32,11 +32,11 @@ class PointSourcesComponent(Component):
 class RadioSources(PointSourcesComponent):
     """Radio sources, each a power law with its own spectral index.
 
-    Positions, amplitudes (mJy at `nu_0`, in GHz) and spectral indices come from the
+    Positions, amplitudes (mJy at `nu_ref`, in GHz) and spectral indices come from the
     `template_path` table.
     """
 
-    DEFAULTS = {**PointSourcesComponent.DEFAULTS, "template_path": None, "nu_0": None}
+    DEFAULTS = {**PointSourcesComponent.DEFAULTS, "template_path": None, "nu_ref": None}
     amplitude_unit = "mJy"
     # The spectral indices `alpha_arr` come from the table, so the chain does not store them.
     sed_param_names = ("nu_ref",)
@@ -44,7 +44,6 @@ class RadioSources(PointSourcesComponent):
     def __init__(self, params: Bunch, comp_name: str, pol: str):
         """The component `comp_name`, with its sources read from the `template_path` table."""
         super().__init__(params, comp_name, pol)
-        self.nu_ref = self.cfg.nu_0
         # Flux density to RJ temperature at `nu_ref` only: `get_sed` already holds the full
         # frequency dependence, including the nu^-2 of the RJ relation. Converting at the band
         # frequency as well would scale the sources as nu^(alpha-4).
@@ -145,7 +144,7 @@ class RadioSources(PointSourcesComponent):
         diffuse component."""
         return self.get_sky(self.nu_ref, nside, fwhm_rad)
 
-    def comp2band(self, band:BandAlms, nthreads: int = 1):
+    def comp2band(self, band:Band, nthreads: int = 1):
         """Paint the sources into the band's pixel map `band.map` (allocated if None), in uK_RJ at
         the band frequency.
 
@@ -162,7 +161,7 @@ class RadioSources(PointSourcesComponent):
         for pixels, beam, scale in zip(self.pix_disc_idx_list, self.beam_disc_val_list, scales):
             band.map[0, pixels] += beam*scale
 
-    def band2comp(self, band:BandAlms, nthreads: int = 1):
+    def band2comp(self, band:Band, nthreads: int = 1):
         """The transpose of `comp2band`: replace `amps` with the beam-weighted sums of `band.map`.
         """
         if band.pol == "QU":

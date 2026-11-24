@@ -76,7 +76,7 @@ compsep:
 
   # MCMC sampling groups: Metropolis-Hastings over the spectral indices of the selected
   # components. After each in-bounds proposal the CG groups named in `update_amplitude_groups` are re-solved,
-  # the chi2 over `chisq_bands` (all bands here) drives the accept/reject, and a rejected step reverts
+  # the chi^2 over `chisq_bands` (all bands here) drives the accept/reject, and a rejected step reverts
   # both the indices and all amplitudes. `numstep` MH steps are taken per Gibbs sweep.
   mcmc_sampling_groups:
     sample_spectral_indices:
@@ -93,7 +93,7 @@ compsep:
       numstep: 1
 
       # chisq_bands: [Planck30GHz, WMAPKa, WMAPQ1, WMAPQ2, WMAPV1, WMAPV2, Planck857GHz, Planck353GHz]
-      # Optional: restrict the accept/reject chi2 to part of the sky (C3's
+      # Optional: restrict the accept/reject chi^2 to part of the sky (C3's
       # MCMC_SAMPLING_GROUP_CHISQ_MASK). One HEALPix file per group, applied to every band in the
       # group; ud_graded to each band's nside and thresholded at 0.5, with >0.5 meaning "keep".
       # This is a parameter-domain mask only -- it never enters the noise model or the amplitude

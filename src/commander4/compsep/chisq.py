@@ -27,25 +27,25 @@ def log_fit(mpi_info: MPIInfo, band_map: BandMap, comp_list: CompList, label: st
     compsep = mpi_info.compsep
     sky_at_band = comp_list.get_sky_at_band(band_map)
     pol_names = ["Q", "U"] if band_map.pol == "QU" else ["I"]
-    chi2_polband, ndof_polband = 0.0, 0
+    chisq_polband, ndof_polband = 0.0, 0
     for ipol in range(band_map.npol):
         # An unobserved pixel has zero inverse-noise weight, and contributes no degree of freedom.
         observed = band_map.map_inv_var[ipol] > 0
         whitened_residual = ((band_map.map_sky[ipol] - sky_at_band[ipol])[observed]
                              *np.sqrt(band_map.map_inv_var[ipol][observed]))
-        chi2_polband += np.sum(whitened_residual**2, dtype=np.float64)
+        chisq_polband += np.sum(whitened_residual**2, dtype=np.float64)
         ndof_polband += whitened_residual.size
         logger.verbose(f"Fit after {label} on rank {compsep.rank} for pol={pol_names[ipol]} "
                        f"({band_map.nu}GHz): mean|(d-s)/sigma|="
                        f"{np.mean(np.abs(whitened_residual)):.3f}, "
-                       f"red.chi2={np.mean(whitened_residual**2):.3f} "
+                       f"red.chisq={np.mean(whitened_residual**2):.3f} "
                        f"(ndof={whitened_residual.size}).")
 
-    total = compsep.comm.allreduce(chi2_polband, op=MPI.SUM)
+    total = compsep.comm.allreduce(chisq_polband, op=MPI.SUM)
     ndof = compsep.comm.allreduce(ndof_polband, op=MPI.SUM)
     if compsep.rank == 0:
-        logger.info(f"Fit after {label}, all bands: chi2={total:.6e}, ndof={ndof}, "
-                    f"red.chi2={total/ndof:.4f}")
+        logger.info(f"Fit after {label}, all bands: chisq={total:.6e}, ndof={ndof}, "
+                    f"red.chisq={total/ndof:.4f}")
 
 
 @benchmark("chain-gather")
@@ -59,7 +59,7 @@ def collect_fit_diagnostics(mpi_info: MPIInfo, params: Bunch, band_map: BandMap,
 
     Returns:
         `(fit_tree, band_frequencies)` on the master, and two empty dicts elsewhere. `fit_tree`
-        holds the `chi2` group and, when kept, the `residuals` group. `band_frequencies` maps each
+        holds the `chisq` group and, when kept, the `residuals` group. `band_frequencies` maps each
         band name to its frequency in GHz.
     """
     compsep = mpi_info.compsep
@@ -77,50 +77,50 @@ def collect_fit_diagnostics(mpi_info: MPIInfo, params: Bunch, band_map: BandMap,
 
     # chi^2 in `nside_chisq` pixels. Row 0 is I and rows 1-2 are Q and U, so the I and QU ranks of
     # one band do not collide in the sum over ranks.
-    chi2_map = np.zeros((3, npix_chisq))
-    chi2_polband, ndof_polband = 0.0, 0
+    chisq_map = np.zeros((3, npix_chisq))
+    chisq_polband, ndof_polband = 0.0, 0
     for ipol in range(band_map.npol):
         observed = band_map.map_inv_var[ipol] > 0
         whitened_residual = residual[ipol][observed]*np.sqrt(band_map.map_inv_var[ipol][observed])
-        chi2_polband += np.sum(whitened_residual**2, dtype=np.float64)
+        chisq_polband += np.sum(whitened_residual**2, dtype=np.float64)
         ndof_polband += whitened_residual.size
-        chi2_full = np.zeros(npix)
-        chi2_full[observed] = whitened_residual**2
-        chi2_row = 1 + ipol if band_map.pol == "QU" else 0
-        chi2_map[chi2_row] += hp.ud_grade(chi2_full, nside_chisq)*subpixels_per_chisq_pixel
+        chisq_full = np.zeros(npix)
+        chisq_full[observed] = whitened_residual**2
+        chisq_row = 1 + ipol if band_map.pol == "QU" else 0
+        chisq_map[chisq_row] += hp.ud_grade(chisq_full, nside_chisq)*subpixels_per_chisq_pixel
 
     # The chi^2 of every polband, added into one low-resolution map.
-    chi2_map_total = np.zeros_like(chi2_map) if compsep.rank == 0 else None
-    compsep.comm.Reduce(chi2_map, chi2_map_total, op=MPI.SUM, root=0)
+    chisq_map_total = np.zeros_like(chisq_map) if compsep.rank == 0 else None
+    compsep.comm.Reduce(chisq_map, chisq_map_total, op=MPI.SUM, root=0)
     polband_fit = Bunch(band_name=compsep.band_name, pol=compsep.pol,
-                        nu=float(band_map.nu), chi2=float(chi2_polband), ndof=ndof_polband,
+                        nu=float(band_map.nu), chisq=float(chisq_polband), ndof=ndof_polband,
                         residual=residual if include_residual_maps else None)
     polband_fits = compsep.comm.gather(polband_fit, root=0)
     if compsep.rank != 0:
         return {}, {}
 
-    total = sum(polband_fit.chi2 for polband_fit in polband_fits)
+    total = sum(polband_fit.chisq for polband_fit in polband_fits)
     ndof = sum(polband_fit.ndof for polband_fit in polband_fits)
-    chi2: dict = {"total": total, "ndof": ndof, "bands": {}}
-    chi2["reduced"] = total/ndof if ndof > 0 else float("nan")
+    chisq: dict = {"total": total, "ndof": ndof, "bands": {}}
+    chisq["reduced"] = total/ndof if ndof > 0 else float("nan")
     # The z-score says whether the fit is good: chi-squared grows with the map size, its z-score
     # does not.
-    chi2["z"] = (total - ndof)/np.sqrt(2.0*ndof) if ndof > 0 else float("nan")
+    chisq["z"] = (total - ndof)/np.sqrt(2.0*ndof) if ndof > 0 else float("nan")
     if include_chisq_map:
-        chi2["map"] = chi2_map_total.astype(np.float32)
+        chisq["map"] = chisq_map_total.astype(np.float32)
 
     residuals: dict = {}
     band_frequencies: dict[str, float] = {}
     for polband_fit in polband_fits:
         polband_name = f"{polband_fit.band_name}_{polband_fit.pol}"
-        chi2["bands"][polband_name] = {
-            "chi2": polband_fit.chi2, "ndof": polband_fit.ndof, "nu": polband_fit.nu,
-            "reduced": polband_fit.chi2/polband_fit.ndof if polband_fit.ndof > 0 else float("nan")}
+        chisq["bands"][polband_name] = {
+            "chisq": polband_fit.chisq, "ndof": polband_fit.ndof, "nu": polband_fit.nu,
+            "reduced": polband_fit.chisq/polband_fit.ndof if polband_fit.ndof > 0 else float("nan")}
         band_frequencies[polband_fit.band_name] = polband_fit.nu
         if polband_fit.residual is not None:
             residuals[polband_name] = polband_fit.residual.astype(np.float32)
 
-    fit_tree: dict = {"chi2": chi2}
+    fit_tree: dict = {"chisq": chisq}
     if residuals:
         fit_tree["residuals"] = residuals
     return fit_tree, band_frequencies

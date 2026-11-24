@@ -214,9 +214,10 @@ def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[Amp
             diagnostics["mcmc"] = mcmc_stats
         write_compsep_chain_to_file(comp_list, params, chain, iteration, diagnostics,
                                     band_frequencies)
-        chi2 = fit_tree["chi2"]
-        logger.summary(f"Chain {chain}, iteration {iteration} complete: chi2={chi2['total']:.6e}, "
-                       f"ndof={chi2['ndof']}, red.chi2={chi2['reduced']:.4f}, z={chi2['z']:.3f}.")
+        chisq = fit_tree["chisq"]
+        logger.summary(f"Chain {chain}, iteration {iteration} complete: "
+                       f"chisq={chisq['total']:.6e}, ndof={chisq['ndof']}, "
+                       f"red.chisq={chisq['reduced']:.4f}, z={chisq['z']:.3f}.")
 
     with benchmark("end-barrier"):
         compsep.comm.Barrier()
