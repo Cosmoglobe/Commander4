@@ -156,14 +156,14 @@ class CGMapmaker:
     #     length ``2N`` (``x -> [x, x[::-1]]``), ``H = T_omega`` is the filter evaluated on the ``2N``
     #     frequency grid, and ``R`` restricts back to the first ``N`` samples. The grid is in physical
     #     Hz (``rfftfreq(2N, d=1/fsamp)``), so ``T_omega`` sees true frequencies and a time constant
-    #     is in seconds, not samples. Mirroring makes the scan boundary continuous so a causal ``H`` does
-    #     not wrap the scan's end onto its start (matching ``apply_N_inv`` and the simulator that bakes
-    #     ``H`` in).
+    #     is in seconds, not samples. Mirroring makes the scan boundary continuous so a causal ``H``
+    #     does not wrap the scan's end onto its start (matching ``apply_N_inv`` and the simulator that
+    #     bakes ``H`` in).
 
     #     The transpose is ``T^T = E^T F^-1 diag(H*) F R^T``: ``R^T`` zero-pads (``x -> [x, 0]``), the
     #     filter is **conjugated** (``H*``; a frequency flip is *not* the transpose for a non-trivial
-    #     ``H``), and ``E^T`` folds the mirror back (``v -> v[:N] + v[N:][::-1]``). Implementing the two
-    #     directions as this exact adjoint pair keeps the mapmaking operator ``P^T T^T N^-1 T P``
+    #     ``H``), and ``E^T`` folds the mirror back (``v -> v[:N] + v[N:][::-1]``). Implementing the
+    #     two directions as this exact adjoint pair keeps the mapmaking operator ``P^T T^T N^-1 T P``
     #     symmetric, so the CG solve stays well-posed. At ``T_omega = 1`` both reduce to the identity.
     #     """
     #     if self.T_omega is None:
@@ -179,30 +179,18 @@ class CGMapmaker:
     #     out = backward_rfft(forward_rfft(ext, nthreads=self.nthreads) * filt, 2 * n,
     #                         nthreads=self.nthreads)
     #     if adjoint:
-    #         return out[:n] + out[n:][::-1]                                    # E^T: fold the mirror back
-    #     return np.ascontiguousarray(out[:n])                                 # R: keep the first N samples
+    #         return out[:n] + out[n:][::-1]                     # E^T: fold the mirror back
+    #     return np.ascontiguousarray(out[:n])                  # R: keep the first N samples
 
     def apply_T(self, scan_tod_arr: NDArray, sky_model_tod: NDArray | None = None):
-        """Apply the transfer-function operator ``T = R F^-1 diag(T_omega) F E`` to one scan.
-
-        ``T_omega`` is the (Hermitian-symmetric) filter ``H(omega)``; the mirrored FFT (reflect-extend
-        to ``2N``, filter, keep the first ``N`` samples) suppresses boundary wrap-around. Returns a new
-        array of the same length; see ``_apply_T`` for the full definition.
-        """
+        """Return the transfer function ``T`` applied to one scan (see ``_apply_T``)."""
         if self.TF is None:
             return scan_tod_arr
         else:
             return self.TF.apply(scan_tod_arr, self.fsamp, adjoint=False, nthreads=self.nthreads, prior_signal=sky_model_tod)
 
     def apply_T_adjoint(self, scan_tod_arr, sky_model_tod: NDArray | None = None):
-        """Apply the transpose ``T^T`` of the transfer-function operator to one scan.
-
-        This is the exact numerical transpose of ``apply_T``: zero-pad, filter with the **conjugated**
-        symbol ``T_omega*``, and fold the mirror back (``v -> v[:N] + v[N:][::-1]``). Conjugating the
-        filter (rather than flipping the frequency array) is what makes it the true adjoint for a
-        non-trivial ``T_omega``, and hence keeps ``P^T T^T N^-1 T P`` symmetric. Returns a new array
-        of the same length; see ``_apply_T``.
-        """
+        """Return the transpose ``T^T`` of the transfer function applied to one scan."""
         if self.TF is None:
             return scan_tod_arr
         else:
