@@ -170,7 +170,8 @@ class TODReader:
         return DetectorGroupTOD(scans, self.experiment._name, self.band._name,
                                 self.band.eval_nside, self.band.freq, self.band.fwhm, fsamp,
                                 len(self.det_names), self.band.polarization, self.noise_model,
-                                tf=_build_from_node(self.band.transfer_function),
+                                tf=(_build_from_node(self.band.transfer_function)
+                                    if "transfer_function" in self.band else None),
                                 instrument_filepath=getattr(self.experiment, "instrument_file",
                                                             None),
                                 hfi_demodulation=self.hfi_demodulation, band_unit=self.band_unit,
