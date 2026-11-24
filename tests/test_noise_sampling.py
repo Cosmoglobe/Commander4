@@ -10,7 +10,6 @@ from scipy.fft import rfftfreq
 from commander4.tod.noise.sigma0 import (calc_sigma0_simple, calc_sigma0_robust,
                                               calc_sigma0_binned_psd)
 from commander4.tod.noise.psd import NoisePSD2Oof, NoisePSDOof
-from commander4.file_io.experiments.read_utils import apply_noise_fit_range
 from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.sample_ncorr import (sample_correlated_noise,
                                                     corr_noise_realization_with_gaps,
@@ -491,12 +490,13 @@ class TestNoisePSD2Oof:
             assert not np.allclose(out[~mask], noise[~mask])   # gaps replaced
             assert np.var(out[~mask]) > 0
 
-    def test_apply_noise_fit_range_sets_every_sampled_window(self):
-        """The reader's shared limits must reach all four sampled parameters, not just fknee/alpha."""
+    def test_fit_range_from_the_parameter_file_sets_every_sampled_window(self):
+        """The shared fit limits must reach all four sampled parameters, not just fknee/alpha."""
         m = NoisePSD2Oof()
-        params = Bunch(tod_processing=Bunch(corr_noise=Bunch(
-            enabled=True, psd_fit_nu_min=0.5, psd_fit_nu_max=4.0)))
-        apply_noise_fit_range(m, params)
+        params = Bunch(experiments=Bunch(EXP=Bunch(bands=Bunch(B=Bunch()))),
+                       tod_processing=Bunch(corr_noise=Bunch(
+                           enabled=True, psd_fit_nu_min=0.5, psd_fit_nu_max=4.0)))
+        m.apply_param_file(params, "EXP", "B")
         np.testing.assert_array_equal(m.nu_fit[1:], np.tile([0.5, 4.0], (4, 1)))
         assert np.all(np.isnan(m.nu_fit[0]))   # the sigma0 row is left alone
 
