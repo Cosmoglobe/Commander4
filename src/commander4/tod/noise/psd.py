@@ -385,10 +385,12 @@ class NoisePSD2Oof(NoisePSD):
     param_names = ('sigma0', 'fknee', 'alpha', 'fknee2', 'alpha2')
 
     def __init__(self,
-                 P_active_mean = [np.nan, 1.0, -2.7, 5.0, 1.0],
-                 P_active_rms = [np.nan, np.inf, np.inf, np.inf, np.inf],
-                 P_uni = [[np.nan, np.nan], [0.01, 100.0], [-4.5, -0.5], [0.01, 12.0], [1e-6, 5.0]],
-                 nu_fit = [[np.nan, np.nan], [0, 10.0], [0, 10.0], [0, 12.0], [0, 12.0]],
+                 P_active_mean: ArrayLike = (np.nan, 1.0, -2.7, 5.0, 1.0),
+                 P_active_rms: ArrayLike = (np.nan, np.inf, np.inf, np.inf, np.inf),
+                 P_uni: ArrayLike = ((np.nan, np.nan), (0.01, 100.0), (-4.5, -0.5), (0.01, 12.0),
+                                     (1e-6, 5.0)),
+                 nu_fit: ArrayLike = ((np.nan, np.nan), (0, 10.0), (0, 10.0), (0, 12.0),
+                                      (0, 12.0)),
                  **kw):
         P_lognorm = np.array([False, True, False, True, False])  # sigma0, fknee, alpha, fknee2, alpha2
         super().__init__(P_active_mean=P_active_mean[:5], P_active_rms=P_active_rms[:5],
