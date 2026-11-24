@@ -19,6 +19,7 @@ from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
+from commander4.math_utils.transfer_func import SinglePole
 from commander4.tod.samples import TODSamples
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.tod.data_selection import DataSelection
@@ -52,7 +53,8 @@ def _build_band(pix: np.ndarray, bad_idx, nside: int, sigma0: float, pols: str,
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
     band = DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=nside, nu=0.0,
                             fwhm_arcmin=0.0, fsamp=fsamp, ndet=1, pols=pols,
-                            noise_model=noise_model, tf_tau_sec=tf_tau_sec)
+                            noise_model=noise_model,
+                            tf=SinglePole(tf_tau_sec) if tf_tau_sec is not None else None)
     ts = TODSamples.__new__(TODSamples)
     ts.experiment_data, ts.band_comm = band, MPI.COMM_SELF
     ts.selection = make_step(DataSelection, 1, 1)

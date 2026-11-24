@@ -75,14 +75,13 @@ compsep:
   cg_sampling_groups:
     sample_amps_CG:
       enabled: false
-      comps: [CMB, Synchrotron, ThermalDust]
+      comps: [cmb, sync, dust]
       bands: [Band30GHz, Band44GHz, Band70GHz, Band100GHz, Band217GHz, Band353GHz]
       optimize: false   # was compsep.sample_amplitudes: true
       max_iter: 300
       max_iter_pol: 300
       err_tol: 0.0
       preconditioner: JointPreconditioner
-      dense_matrix_debug_mode: false
 
   mcmc_sampling_groups: {}
 
@@ -117,28 +116,23 @@ compsep:
 # ----------------------------------------
 # All spectral parameters equal the simulated truth.
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      longname: "CMB"
-      shortname: "cmb"
       init_from: "/mn/stornext/u3/leoab/c4_sims/simgen_transfunc_asymm/debug/truth_CMB.fits" #"/mn/stornext/d5/data/duncanwa/WMAP/data/COM_CMB_IQU-smica_2048_R3.00_full_uK_14amin_dip.fits"
       Cl_prior_amplitude: [1.0e+6, 1.0e+4]  # D_l at l_pivot [I, QU]; uK_RJ^2 (~uK_CMB^2 at 1 GHz)
       Cl_prior_beta: [0.0, -0.5]
       Cl_prior_l_pivot: 20
       units: "uK_RJ"
       lmax: 191
-      spatially_varying_MM: False
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      longname: "Thermal-Dust"
-      shortname: "dust"
       init_from: "/mn/stornext/u3/leoab/c4_sims/simgen_transfunc_asymm/debug/truth_ThermalDust.fits" #"/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
       Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
       Cl_prior_l_pivot: 50
@@ -147,15 +141,12 @@ components:
       nu_ref: 353
       units: "uK_RJ"
       lmax: 191
-      spatially_varying_MM: False
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      longname: "Synchrotron"
-      shortname: "sync"
       init_from: "/mn/stornext/u3/leoab/c4_sims/simgen_transfunc_asymm/debug/truth_Synchrotron.fits" #"/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
       Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
       Cl_prior_l_pivot: 50
@@ -164,7 +155,6 @@ components:
       nu_ref: 30
       units: "uK_RJ"
       lmax: 191
-      spatially_varying_MM: False
 
 # ----------------------------------------
 # EXPERIMENTS

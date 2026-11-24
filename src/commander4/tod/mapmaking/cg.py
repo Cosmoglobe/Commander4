@@ -51,8 +51,8 @@ class CGMapmaker:
         """Initialise the CG mapmaker.
 
         Args:
-            detector_tod: Detector-group TOD data for this band. Its bolometer time constant
-                (`tf_tau_sec`, None for none) sets the transfer function T.
+            detector_tod: Detector-group TOD data for this band. Its bolometer transfer function
+                (`tf`, None for none) sets T.
             detector_samples: Sampled noise and gain parameters for the current chain state. The
                 ranks of its `band_comm` contribute to the same output map.
             params: The full parameter file: `resources.tod.num_threads` for the FFTs, and
