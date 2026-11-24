@@ -95,7 +95,9 @@ class TransferFunction(ABC):
             filt = np.conj(self.response(freqs))                            # H*
         else:
             ext = np.concatenate([signal, signal[::-1]])                    # E: reflect-extend
-            filt = self.response(freqs)                                     # H 
+            filt = self.response(freqs)                                     # H
+        # Keep the filter in the signal's precision, so a float32 signal stays float32 throughout.
+        filt = filt.astype(np.complex64 if signal.dtype == np.float32 else np.complex128)
         out = backward_rfft(forward_rfft(ext, nthreads=nthreads) * filt, 2 * n,
                                     nthreads=nthreads)
         if adjoint:
@@ -135,7 +137,7 @@ class SinglePole(TransferFunction):
         Parameters can be specified to overwrite the fitted ones saved as members.
         """
         tau = self.tau if tau_sec is None else tau_sec
-        return A * np.exp(-t / tau1)
+        return A * np.exp(-t / tau)
 
 
 class MultiPole(TransferFunction):
