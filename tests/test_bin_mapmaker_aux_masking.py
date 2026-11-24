@@ -43,8 +43,8 @@ def _build_band(pix: np.ndarray, psi: np.ndarray, flag: np.ndarray, tod: np.ndar
         flag=flag.astype(np.int64), bad_data_bitmask=_BITMASK,
     )
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
-    return DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=_NU, fwhm=0.0,
-                       fsamp=1.0, ndet=1, pols="IQU", noise_model=noise_model)
+    return DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=_NU,
+                            fwhm_arcmin=0.0, fsamp=1.0, ndet=1, pols="IQU", noise_model=noise_model)
 
 
 def _run_bin_mapmaker(band: DetectorGroupTOD) -> dict[str, np.ndarray]:

@@ -17,11 +17,12 @@ from mpi4py import MPI
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.diagnostics.performance import benchmark
 from commander4.tod.step import ChainArrays, SavedBandSample, TODStep
 from commander4.tod.view import TODView
 
 if TYPE_CHECKING:
-    from commander4.data_models.tod_samples import TODSamples
+    from commander4.tod.samples import TODSamples
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,7 @@ class HFIModulation(TODStep):
         return demodulated
 
 
+    @benchmark("hfi-baselines")
     def sample(self, tod_samples: TODSamples, compsep_output: NDArray,
                rng: np.random.Generator) -> None:
         """Sample HFI baselines for one Gibbs pass and initialize the phase on the first pass.

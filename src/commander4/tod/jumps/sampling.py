@@ -15,14 +15,14 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
-from commander4.diagnostics.performance import log_memory
+from commander4.diagnostics.performance import benchmark, log_memory
 from commander4.parameters.schema import read_settings, resolve_param
 from commander4.tod.jumps.events import JumpEvents, empty_jump_grid, JUMP_EVENT_FIELDS
 from commander4.tod.step import ChainArrays, TODStep
 from commander4.tod.view import TODView
 
 if TYPE_CHECKING:
-    from commander4.data_models.tod_samples import TODSamples
+    from commander4.tod.samples import TODSamples
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,7 @@ class Jumps(TODStep):
         return arrays
 
 
+    @benchmark("jump-detect")
     def sample(self, tod_samples: TODSamples, compsep_output: NDArray, iteration: int) -> None:
         """Detect jump discontinuities from the flag stream and store additive post-jump offsets.
 

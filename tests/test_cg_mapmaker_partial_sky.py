@@ -79,7 +79,7 @@ def _build_band(pix: np.ndarray, psi: np.ndarray, tod: np.ndarray, pols: str,
         ))
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
     return DetectorGroupTOD([ScanTOD(detectors, 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=30.0,
-                            fwhm=0.0, fsamp=1.0, ndet=len(detectors), pols=pols,
+                            fwhm_arcmin=0.0, fsamp=1.0, ndet=len(detectors), pols=pols,
                             noise_model=noise_model, tf_tau_sec=tf_tau_sec)
 
 

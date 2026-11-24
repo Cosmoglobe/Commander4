@@ -90,8 +90,8 @@ def test_standard_scan_is_read_by_detector_name(tmp_path: Path) -> None:
     for det, value, polang in zip(scan.detectors, [1.0, 2.0], [0.1, 0.2]):
         assert det.ntod == NTOD_FFT and det.ntod_original == NTOD
         np.testing.assert_array_equal(det.tod, tod(value)[:NTOD_FFT])
-        np.testing.assert_array_equal(det.get_pix(), (np.arange(NTOD) % 12)[:NTOD_FFT])
-        np.testing.assert_allclose(det.get_psi(), np.linspace(0.0, np.pi, NTOD)[:NTOD_FFT],
+        np.testing.assert_array_equal(det.pointing.get_pix(), (np.arange(NTOD) % 12)[:NTOD_FFT])
+        np.testing.assert_allclose(det.pointing.get_psi(), np.linspace(0.0, np.pi, NTOD)[:NTOD_FFT],
                                    rtol=1e-6)
         assert det.init_scalars[0] == pytest.approx(2.0)
         assert det.polang == polang
@@ -119,8 +119,8 @@ def test_compressed_pointing_is_decoded_with_one_shared_tree(tmp_path: Path) -> 
     # The bins as the writer computes them (`preproc_digitize_and_diff`), then their centers.
     bins = np.floor((psi % (2.0*np.pi))*(4096/(2.0*np.pi))) + 1
     for det in (a, b):
-        np.testing.assert_array_equal(det.get_pix(), pix[:NTOD_FFT])
-        np.testing.assert_allclose(det.get_psi(), ((bins - 0.5)*2*np.pi/4096)[:NTOD_FFT],
+        np.testing.assert_array_equal(det.pointing.get_pix(), pix[:NTOD_FFT])
+        np.testing.assert_allclose(det.pointing.get_psi(), ((bins - 0.5)*2*np.pi/4096)[:NTOD_FFT],
                                    rtol=1e-6)
     assert a.pointing.pix.tree.dtype == np.int64
     assert a.pointing.pix.tree is a.pointing.psi.tree is b.pointing.pix.tree

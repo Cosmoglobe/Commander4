@@ -54,8 +54,9 @@ compsep:
   mcmc_sampling_groups:
     dust_beta:
       enabled: true
-      parameters: spectral_indices
-      comps: [ThermalDust]
+      sample:
+        dust:
+          beta: {proposal_sigma: 0.02, bounds: [1.0, 2.5]}
       update_amplitude_groups: []
       numstep: 2
       chisq_bands: [Band100, Band353]
@@ -112,42 +113,30 @@ compsep:
 # The CMB is intensity only: with two polarized bands, the per-pixel solver (which has no prior)
 # cannot separate three polarized components, and the QU fit then fails (reduced chi^2 ~60).
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "I"
-      longname: "CMB"
-      shortname: "cmb"
       lmax: 47
-      spatially_varying_MM: false
       Cl_prior_amplitude: null
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      longname: "Thermal-Dust"
-      shortname: "dust"
       lmax: 47
-      spatially_varying_MM: false
       Cl_prior_amplitude: null
       beta: 1.60
       T: 20
       nu_ref: 353
       units: "uK_RJ"
-      sample_spectral_index: true
-      spectral_index_proposal_sigma: 0.02
-      spectral_index_bounds: [1.0, 2.5]
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      longname: "Synchrotron"
-      shortname: "sync"
       lmax: 47
-      spatially_varying_MM: false
       Cl_prior_amplitude: null
       beta: -3.1
       nu_ref: 30

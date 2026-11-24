@@ -5,13 +5,13 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.file_io.map_reader import read_data_map_from_file
 from commander4.parameters.bunch import as_bunch_recursive
 
 
 def _read_band(path: Path, rms: np.ndarray, eval_nside: int | None = None,
-               sky: np.ndarray | None = None) -> DetectorMap:
+               sky: np.ndarray | None = None) -> BandMap:
     """Write a sky map (default: ones) and `rms` to a FITS table, and read them back as one I-only
     band."""
     sky = np.ones(rms.size) if sky is None else sky
@@ -26,7 +26,7 @@ def _read_band(path: Path, rms: np.ndarray, eval_nside: int | None = None,
     if eval_nside is not None:
         band["eval_nside"] = eval_nside
     params = as_bunch_recursive({"compsep": {"bands": {"b30": {}}}})
-    return read_data_map_from_file(as_bunch_recursive(band, name="b30"), params)
+    return read_data_map_from_file(as_bunch_recursive(band, name="b30"), "I", params)
 
 
 def test_rms_maps_are_read_as_inverse_variance(tmp_path: Path) -> None:
@@ -34,10 +34,10 @@ def test_rms_maps_are_read_as_inverse_variance(tmp_path: Path) -> None:
     rms = np.full(hp.nside2npix(2), 2.0)
     rms[[5, 9]] = [0.0, np.inf]
 
-    detmap = _read_band(tmp_path / "band.fits", rms)
+    band_map = _read_band(tmp_path / "band.fits", rms)
     expected = np.full(rms.size, 0.25)
     expected[[5, 9]] = 0.0
-    np.testing.assert_array_equal(detmap.map_inv_var[0], expected)
+    np.testing.assert_array_equal(band_map.map_inv_var[0], expected)
 
     downgraded = _read_band(tmp_path / "band.fits", rms, eval_nside=1)
     assert downgraded.map_inv_var.shape == (1, hp.nside2npix(1))
@@ -68,6 +68,6 @@ def test_downgrading_takes_the_inverse_variance_weighted_mean(tmp_path: Path) ->
                                hp.reorder(weight_nest.sum(axis=1), n2r=True), rtol=1e-5)
 
 
-def test_detector_map_rejects_a_pixel_count_inconsistent_with_nside() -> None:
+def test_band_map_rejects_a_pixel_count_inconsistent_with_nside() -> None:
     with pytest.raises(ValueError, match="pixel count 13 does not match nside 1"):
-        DetectorMap(np.zeros(13), np.ones(13), nu=30.0, fwhm=60.0, nside=1)
+        BandMap(np.zeros(13), np.ones(13), nu=30.0, fwhm_arcmin=60.0, nside=1)

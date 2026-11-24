@@ -17,13 +17,12 @@ from pixell.bunch import Bunch
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.pointing import remap_pix_nside
-from commander4.diagnostics.performance import benchmark
 from commander4.tod.noise.sample_ncorr import realize_noise_in_gaps
 from commander4.tod.sky_projection import project_sky_to_tod, get_s_orb_tod
 
 # Type hints only: `TODSamples` imports the sampling steps, and they import this module.
 if TYPE_CHECKING:
-    from commander4.data_models.tod_samples import TODSamples
+    from commander4.tod.samples import TODSamples
 
 logger = logging.getLogger(__name__)
 
@@ -263,8 +262,9 @@ class TODView:
         Averaging over the good samples alone, rather than over the whole block, is what makes the
         fractional keep threshold in ``_downsample_keep`` safe: a surviving block may still contain
         flagged samples, and including those would move its mean by many sigma. Model TODs go
-        through here too, so model and data are averaged over the same samples -- Planck sweeps more
-        than a degree during a 0.2 s block, so averaging them over different subsets would not cancel.
+        through here too, so model and data are averaged over the same samples -- Planck sweeps
+        more than a degree during a 0.2 s block, so averaging them over different subsets would not
+        cancel.
         """
         factor = self._downsample_factor
         if factor == 1:
@@ -304,7 +304,7 @@ class TODView:
     def _fullres_pix(self) -> NDArray[np.integer]:
         """Full-rate pixel pointing (used internally for model evaluation and mask projection)."""
         if self._pix is None:
-            self._pix, self._psi = self.detector.get_pix_psi()
+            self._pix, self._psi = self.detector.pointing.get_pix_psi()
         return self._pix
 
     @property
@@ -322,7 +322,7 @@ class TODView:
     def _fullres_psi(self) -> NDArray[np.floating] | NDArray[np.integer]:
         """Full-rate polarization angle (used internally for model evaluation)."""
         if self._psi is None:
-            self._pix, self._psi = self.detector.get_pix_psi()
+            self._pix, self._psi = self.detector.pointing.get_pix_psi()
         return self._psi
 
     @property
@@ -362,10 +362,11 @@ class TODView:
 
         The named ``mask_type`` is used when the band defines one under ``processing_masks:``;
         otherwise the band's default ``processing_mask:`` is used; if neither exists, returns
-        ``None`` (no processing cut). A named type the band does not define falls back to the default
-        *silently*, so single-mask bands need no per-operation entries (mistyped ``processing_masks:``
-        keys are caught at config load, not per sample). The map is looked up at its native nside,
-        converting the pointing from the detector's evaluation nside when the two differ.
+        ``None`` (no processing cut). A named type the band does not define falls back to the
+        default *silently*, so single-mask bands need no per-operation entries (mistyped
+        ``processing_masks:`` keys are caught at config load, not per sample). The map is looked up
+        at its native nside, converting the pointing from the detector's evaluation nside when the
+        two differ.
         """
         specific = getattr(self.detector, "specific_proc_masks", None) or {}
         default = getattr(self.detector, "default_proc_mask", None)
@@ -519,9 +520,8 @@ class TODView:
         if self._far_sidelobes is None:
             far_sidelobes = self.tod_samples.far_sidelobes
             if far_sidelobes.cfg.enabled and far_sidelobes.cubes:
-                with benchmark("far-beam-proj"):
-                    full = far_sidelobes.get_projection(self._fullres_pix, self._fullres_psi,
-                                                        self.idet)
+                full = far_sidelobes.get_projection(self._fullres_pix, self._fullres_psi,
+                                                    self.idet)
             else:
                 full = np.zeros(self.detector.ntod)
             self._far_sidelobes = self._downsample_mean(full)
@@ -599,8 +599,8 @@ class TODView:
 
         Everything is returned at the view's active downsample resolution. The detector model is
         ``d = (g_abs + g_rel + g_temp) * (s_sky + s_orb + s_sl) + n``, with ``s_sl`` the
-        far-sidelobe pickup. To sample ``target_term`` against a calibrator signal ``s_cal`` (the part of
-        ``s_sky + s_orb + s_sl`` selected by ``calibrate_against``), the residual must reduce to
+        far-sidelobe pickup. To sample ``target_term`` against a calibrator signal ``s_cal`` (the
+        part of ``s_sky + s_orb + s_sl`` selected by ``calibrate_against``), the residual must be
         ``g_target * s_cal + n``. It is therefore `get_tod`, which has all three signals removed at
         the full gain, with ``g_target * s_cal`` added back.
 

@@ -31,33 +31,30 @@ general:
   output_dir: "../c4_sims/simgen_patch/"
 
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      shortname: "cmb"
       lmax: 383
       solar_dipole: false
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      shortname: "dust"
       beta: 1.54
       T: 20
       nu_ref: 353
       lmax: 383
       template: {source: "pysm3", preset: "d0"}
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      shortname: "sync"
       beta: -3.1
       nu_ref: 30
       lmax: 383

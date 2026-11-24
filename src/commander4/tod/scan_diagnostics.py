@@ -13,6 +13,7 @@ from pixell.bunch import Bunch
 from scipy.fft import rfftfreq
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.diagnostics.performance import benchmark
 from commander4.math_utils.fft import forward_rfft
 from commander4.tod.step import ChainArrays, TODStep
 from commander4.tod.view import TODView
@@ -132,6 +133,7 @@ class TODDiagnostics(TODStep):
                     scan_tods[:] = [None] * len(scan_tods)
 
 
+    @benchmark("tod-diagnostics")
     def record_scan(self, view: TODView, residual_tod: NDArray, n_corr: NDArray | None) -> None:
         """ Record the diagnostics of the focused detector-scan.
 

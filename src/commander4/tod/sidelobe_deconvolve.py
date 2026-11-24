@@ -16,6 +16,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.diagnostics.performance import benchmark
 from commander4.math_utils.alm import alm_real2complex_commander3
 from commander4.mpi.shared_memory import SharedArray
 from commander4.parameters.schema import read_settings
@@ -23,7 +24,7 @@ from commander4.tod.step import TODStep
 
 
 if TYPE_CHECKING:
-    from commander4.data_models.tod_samples import TODSamples
+    from commander4.tod.samples import TODSamples
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ class FarSidelobes(TODStep):
         self.cubes = []
 
 
+    @benchmark("far-beam")
     def build(self, tod_samples: TODSamples, compsep_output_full: NDArray | None,
               node_comm: MPI.Comm) -> None:
         """Build one ducc0 convolution cube for each detector's T/E/B sidelobe beam (collective).
@@ -177,6 +179,7 @@ class FarSidelobes(TODStep):
         self.cubes = [self.shared.array[idet] for idet in range(len(blms))]
 
 
+    @benchmark("far-beam-proj")
     def get_projection(self, pix: NDArray, psi: NDArray, idet: int) -> NDArray:
         """Far-sidelobe pickup for one detector-scan, in uK_RJ.
 

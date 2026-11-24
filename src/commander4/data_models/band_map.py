@@ -1,0 +1,149 @@
+"""`BandMap`: one polband's maps as component separation sees them, plus common-beam smoothing.
+
+This is the object TOD processing sends across the communicator each iteration: the binned or
+CG-solved sky map, its inverse noise variance, and the band metadata (frequency, beam, nside...).
+"""
+import logging
+import numpy as np
+import healpy as hp
+from copy import deepcopy
+from numpy.typing import NDArray
+from commander4.math_utils.arithmetic import inplace_arr_prod
+
+logger = logging.getLogger(__name__)
+
+
+def smooth_signal_map_noiseweighted(map_signal: NDArray, map_inv_var: NDArray,
+                                    fwhm_rad: float) -> NDArray:
+    """Inverse-variance-weighted Gaussian smoothing of a signal map.
+
+    `map_signal` and `map_inv_var` have shape (npix,) for intensity, or (2, npix) for Q and U.
+    """
+    # Each pixel is weighted by its inverse variance before smoothing, and the result is
+    # renormalized by the smoothed weights.
+    weighted = map_signal*map_inv_var
+    if map_signal.ndim == 1:  # Intensity map
+        smoothed_signal = hp.smoothing(weighted, fwhm=fwhm_rad)
+        smoothed_weight = hp.smoothing(map_inv_var, fwhm=fwhm_rad)
+    else:  # Q and U are one spin-2 field, so they are smoothed together through E and B.
+        npix = map_signal.shape[-1]
+        window = hp.gauss_beam(fwhm_rad, lmax=3*hp.npix2nside(npix) - 1)
+        smoothed_signal = hp.smoothing([np.zeros(npix), *weighted], beam_window=window)[1:]
+        smoothed_weight = np.array([hp.smoothing(w, fwhm=fwhm_rad) for w in map_inv_var])
+    observed = smoothed_weight > 0.0
+    return np.divide(smoothed_signal, smoothed_weight, out=np.zeros_like(smoothed_signal),
+                     where=observed)
+
+
+def smooth_inv_var_map_noiseweighted(map_inv_var: NDArray, fwhm_rad: float) -> NDArray:
+    """Per-pixel inverse noise variance of a map smoothed by `smooth_signal_map_noiseweighted`.
+
+    Note that because of SHT effects like ringing this analytical calculation is fragile.
+    The more robust solution is to do noise simulations to determine the smoothed inverse variance.
+    """
+    npix = map_inv_var.shape[0]
+    nside = hp.npix2nside(npix)
+    smoothed_inv_var = hp.smoothing(map_inv_var, fwhm=fwhm_rad)
+    lmax = 3*nside - 1
+    ell = np.arange(lmax + 1)
+    b_ell = hp.gauss_beam(fwhm_rad, lmax=lmax)
+    p_ell = hp.pixwin(nside, lmax=lmax)
+    omega_pix = hp.nside2resol(nside)**2  # White-noise C_ell for a single pixel.
+    true_empirical_norm = np.sum((2*ell + 1)/(4*np.pi)*omega_pix*(p_ell**2)*(b_ell**2))
+    # The smoothed signal is sum_j B_ij w_j d_j / sum_j B_ij w_j, so its variance is
+    # sum_j B_ij^2 w_j / (sum_j B_ij w_j)^2. The squared beam B_ij^2 is a Gaussian of width
+    # fwhm/sqrt(2), scaled by true_empirical_norm.
+    numerator = hp.smoothing(map_inv_var, fwhm=fwhm_rad/np.sqrt(2.0))*true_empirical_norm
+    # Beam ringing can push either smoothed weight map slightly negative just outside the
+    # footprint; those pixels are unobserved too, and must not come back with a negative or
+    # infinite weight. For a full-sky band both maps are positive everywhere and this is a no-op.
+    observed = (smoothed_inv_var > 0.0) & (numerator > 0.0)
+    return np.divide(smoothed_inv_var**2, numerator, out=np.zeros_like(numerator), where=observed)
+
+
+class BandMap:
+    """The sky map of one polband (a band in "I" or "QU"), its inverse noise variance, and beam."""
+    def __init__(self, map_sky:NDArray, map_inv_var:NDArray, nu:float, fwhm_arcmin:float,
+                 nside:int, lmax:int|None = None):
+        """Store the maps of one band.
+
+        `map_sky` (uK_RJ) and `map_inv_var` (uK_RJ^-2, 0 in unobserved pixels) have shape (npix,)
+        or (1, npix) for intensity, and (2, npix) for Q and U. Both are stored as float32, with
+        shape (npol, npix). `nu` is the band frequency in GHz, `fwhm_arcmin` the beam FWHM.
+        `lmax` defaults to 3*nside - 1.
+        """
+        # A 1-d intensity map becomes one row.
+        map_sky = map_sky.reshape((1,-1)) if map_sky.ndim == 1 else map_sky
+        map_inv_var = map_inv_var.reshape((1,-1)) if map_inv_var.ndim == 1 else map_inv_var
+
+        if map_inv_var.shape != map_sky.shape:
+            raise ValueError("Sky and inverse-variance maps should have matching dimensions.")
+        if map_sky.shape[0] not in [1,2]:
+            raise ValueError("Trying to set sky map with wrong first axis length "
+                             f"{map_sky.shape[0]} != 1 or 2")
+        expected_npix = hp.nside2npix(nside)
+        if map_sky.shape[-1] != expected_npix:
+            raise ValueError(f"Map pixel count {map_sky.shape[-1]} does not match nside {nside} "
+                             f"({expected_npix} pixels).")
+
+        self.map_sky = map_sky.astype(np.float32, copy=False)
+        self.map_inv_var = map_inv_var.astype(np.float32, copy=False)
+        self.nu = nu
+        self.fwhm_arcmin = fwhm_arcmin
+        self.nside = nside
+        # Components are truncated to this lmax in the band, so a component multipole above the
+        # lmax of every band is constrained by its C(l) prior alone.
+        self.lmax = (3*nside - 1) if lmax is None else lmax
+
+    @property
+    def fwhm_rad(self):
+        """Beam FWHM in radians."""
+        return np.deg2rad(self.fwhm_arcmin/60.0)
+    
+    @property
+    def pol(self) -> str:
+        """The polarization of the map: "I" for one map row, "QU" for two."""
+        return "I" if len(self.map_sky) == 1 else "QU"
+
+    @property
+    def spin(self) -> int:
+        """Spin weight of the map (2 for "QU", 0 for "I")."""
+        return 0 if self.pol == "I" else 2
+
+    @property
+    def npol(self) -> int:
+        """Number of polarisation components (1 or 2)."""
+        return len(self.map_sky)
+
+    def smooth_to_resolution(self, target_fwhm_arcmin: float) -> None:
+        """Smooth this band, in place and noise-weighted, to a Gaussian beam of the given FWHM.
+
+        Updates the sky map, the inverse variance and `fwhm_arcmin`. A target finer than the
+        current beam is skipped with a warning.
+        """
+        if self.fwhm_arcmin == target_fwhm_arcmin:
+            return
+        if target_fwhm_arcmin < self.fwhm_arcmin:
+            logger.warning(f"Requested smoothing to {target_fwhm_arcmin} arcmin, finer than this "
+                           f"band's beam of {self.fwhm_arcmin} arcmin; leaving the band "
+                           "unchanged.")
+            return
+        extra_fwhm_rad = np.deg2rad(np.sqrt(target_fwhm_arcmin**2 - self.fwhm_arcmin**2)/60.0)
+        sky, inv_var = self.map_sky.astype(np.float64), self.map_inv_var.astype(np.float64)
+        # Intensity is smoothed as one scalar map, Q and U together as one spin-2 field.
+        smoothed_sky = smooth_signal_map_noiseweighted(sky[0] if self.npol == 1 else sky,
+                                                       inv_var[0] if self.npol == 1 else inv_var,
+                                                       extra_fwhm_rad)
+        smoothed_inv_var = [smooth_inv_var_map_noiseweighted(w, extra_fwhm_rad) for w in inv_var]
+        self.map_sky = np.reshape(smoothed_sky, sky.shape).astype(self.map_sky.dtype, copy=False)
+        self.map_inv_var = np.array(smoothed_inv_var).astype(self.map_inv_var.dtype, copy=False)
+        self.fwhm_arcmin = target_fwhm_arcmin
+
+    def apply_inv_N_map(self, map: NDArray, inplace = True):
+        """Multiply `map` by the inverse noise variance, in place unless `inplace=False`, and
+        return the result."""
+        map_out = map if inplace else deepcopy(map)
+        for ipol in range(self.npol):
+            inplace_arr_prod(map_out[ipol,:], self.map_inv_var[ipol,:])
+
+        return map_out

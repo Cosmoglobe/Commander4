@@ -66,15 +66,15 @@ def _write_compsep_file(run_dir: Path, iteration: int) -> None:
     lmax = 2
     alm_size = hp.Alm.getsize(lmax)
     with h5py.File(path, "w") as handle:
-        handle["chi2/total"] = 100.0 + iteration
-        handle["chi2/ndof"] = 100.0
-        handle["chi2/reduced"] = 1.0 + iteration / 100.0
-        handle["chi2/z"] = iteration / 10.0
-        handle["chi2/bands/Band_I/chi2"] = 50.0
-        handle["chi2/bands/Band_I/ndof"] = 50.0
-        handle["chi2/bands/Band_I/reduced"] = 1.0
-        handle["chi2/bands/Band_I/nu"] = 30.0
-        handle["chi2/map"] = np.ones((3, hp.nside2npix(1)))
+        handle["chisq/total"] = 100.0 + iteration
+        handle["chisq/ndof"] = 100.0
+        handle["chisq/reduced"] = 1.0 + iteration / 100.0
+        handle["chisq/z"] = iteration / 10.0
+        handle["chisq/bands/Band_I/chisq"] = 50.0
+        handle["chisq/bands/Band_I/ndof"] = 50.0
+        handle["chisq/bands/Band_I/reduced"] = 1.0
+        handle["chisq/bands/Band_I/nu"] = 30.0
+        handle["chisq/map"] = np.ones((3, hp.nside2npix(1)))
         handle["residuals/Band_QU"] = np.ones((2, hp.nside2npix(1)))
         residuals = np.geomspace(1.0, 1e-5, 5)
         handle["amplitude_groups/amps/I/cg_residuals"] = residuals
@@ -199,8 +199,8 @@ def test_main_writes_filtered_current_format_plots(tmp_path: Path, monkeypatch):
     density_dir = output_dir / "tod_scans/noise_params_fknee_alpha"
     assert (density_dir / "chain01_Exp_Band_d0_iter0001.png").is_file()
     assert not (density_dir / "chain01_Exp_Band_d0_iter0002.png").exists()
-    chi2_trace = output_dir / "compsep_traces/chi2/chain01_per_band_reduced_I.png"
-    assert chi2_trace.is_file()
+    chisq_trace = output_dir / "compsep_traces/chisq/chain01_per_band_reduced_I.png"
+    assert chisq_trace.is_file()
     assert (output_dir / "compsep_cg/amps/chain01_iter0001.png").is_file()
     assert not (output_dir / "compsep_cg/amps/I").exists()
     assert (output_dir / "maps_components/cmb/chain01_iter0001.png").is_file()
@@ -212,7 +212,7 @@ def test_main_writes_filtered_current_format_plots(tmp_path: Path, monkeypatch):
     sampled_trace = output_dir / "component_traces/cmb/sed/chain01_comps_cmb_sed_sample_param.png"
     assert sampled_trace.is_file()
     assert not (output_dir / "component_traces/cmb/sed/chain01_comps_cmb_sed_nu_ref.png").exists()
-    assert not (output_dir / "compsep_traces/chi2/chain01_chi2_total.png").exists()
+    assert not (output_dir / "compsep_traces/chisq/chain01_chisq_total.png").exists()
     assert not any(path.is_dir() for path in output_dir.rglob("chain*"))
     noise_key = "Exp_Band d0, chain 1: noise parameters:sigma0"
     assert captured_series[noise_key] == ["iter 1", "iter 2"]

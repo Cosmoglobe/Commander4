@@ -31,7 +31,7 @@ class DetectorGroupTOD:
         lmax (int|None): The band lmax (`resolve_band_lmax`), up to which the sky model is
             realized for this band. None means `3*nside - 1`.
         nu (float): Band centre frequency in GHz.
-        fwhm (float): Beam FWHM in arcminutes.
+        fwhm_arcmin (float): Beam FWHM in arcminutes.
         ndet (int): Number of detectors per scan.
         pols (str): Polarisation configuration string (``'I'``, ``'QU'``, or ``'IQU'``).
         noise_model (NoisePSD): Noise model for this detector group.
@@ -45,7 +45,8 @@ class DetectorGroupTOD:
             [[unit_conversions]].
     """
     def __init__(self, scans: list[ScanTOD], experiment_name: str, band_name: str, nside: int,
-                 nu: float, fwhm: float, fsamp: float, ndet: int, pols: str, noise_model: NoisePSD,
+                 nu: float, fwhm_arcmin: float, fsamp: float, ndet: int, pols: str,
+                 noise_model: NoisePSD,
                  tf_tau_sec: float|None = None, instrument_filepath: str|None = None,
                  hfi_demodulation: bool = False, band_unit: str = "uK_RJ", lmax: int | None = None):
         self.scans = scans
@@ -57,7 +58,7 @@ class DetectorGroupTOD:
         self.nu = nu
         self.band_unit = band_unit
         self.band_unit_factor = rj_to_band_unit_factor(nu, band_unit)
-        self.fwhm = fwhm
+        self.fwhm_arcmin = fwhm_arcmin
         self.fsamp = fsamp
         self.ndet = ndet
         self.pols = pols

@@ -121,8 +121,8 @@ recover and are switched off in every file here except where noted:
   `data_selection.chisq_abs_threshold` never fires. `simparam_corrnoise.yml` and
   `simparam_patch.yml` still enable data selection, but only as a diagnostic: the reported
   `chisq_z` quantiles measure how well the sampled noise model whitens the residual.
-- **Spatially varying spectral indices.** `simgen` scales one template by a scalar SED, so
-  `spatially_varying_MM` and per-pixel index sampling see a constant-index sky. (This is also why
+- **Spatially varying spectral indices.** `simgen` scales one template by a scalar SED, so a
+  pixel-dependent mixing matrix and per-pixel index sampling see a constant-index sky. (This is also why
   the truth maps are a single map per component rather than a map per parameter.)
 - **Bolometer transfer functions end to end.** The CG mapmaker deconvolves one single-pole T per
   band, but the model TODs are subtracted without T (see the transfer-function pair above).
@@ -171,7 +171,7 @@ FEATURES UNDER TEST, neither of which any other file here reaches:
     `compsep/perpix_solver.py`. It is the alternative to the global CG solve and is mutually
     exclusive with it, so `cg_sampling_groups` is empty below.
   * `compsep.common_res_fwhm`, the noise-weighted smoothing of every band to one beam, applied at
-    the data sources on read (`data_models/detector_map.py`). The per-pixel solver has no beam
+    the data sources on read (`data_models/band_map.py`). The per-pixel solver has no beam
     model at all, so without this it would silently mix resolutions.
 
 The two go together: the per-pixel solver is only correct once all bands share a beam. The shared
@@ -211,17 +211,17 @@ which describes it and the truth it injects. Generate the TODs first, then run t
     cd ..   && mpirun -n 18 commander4 -p params/sims/simparam_compsep_MCMC.yml
 18 tasks = 6 TOD + 6 CompSep-I + 6 CompSep-QU.
 
-FEATURE UNDER TEST: `compsep.mcmc_sampling_groups` with `parameters: spectral_indices`, the
-Metropolis-Hastings sampler in `compsep/spectral_index.py`, which re-solves the CG amplitude
-groups named in `update_amplitude_groups` between proposal and accept/reject.
+FEATURE UNDER TEST: `compsep.mcmc_sampling_groups` with a `beta` block, the Metropolis-Hastings
+sampler in `compsep/spectral_sampling.py`, which re-solves the CG amplitude groups named in
+`update_amplitude_groups` between proposal and accept/reject.
 
 STARTS AWAY FROM THE TRUTH AT: beta_dust 1.45 (truth 1.54), beta_sync -3.25 (truth -3.10), several
 proposal widths out, so a working sampler has to walk back and then scatter around the truth.
 
 WHAT TO CHECK: the sampled spectral indices in `<output_dir>/chains_compsep/`, and the MH
 acceptance rate logged each iteration. Walking to the truth and then mixing at roughly 0.2-0.5
-acceptance is the pass condition; a chain that sticks means `spectral_index_proposal_sigma` is too
-large, one that random-walks without converging means it is too small.
+acceptance is the pass condition; a chain that sticks means `proposal_sigma` is too large, one
+that random-walks without converging means it is too small.
 
 NOTE that the amplitude fluctuations (the CG group's `optimize: false`) make the MH likelihood
 stochastic, since each proposal is evaluated against a freshly drawn amplitude realization. This

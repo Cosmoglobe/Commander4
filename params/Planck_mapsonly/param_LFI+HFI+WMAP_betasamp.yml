@@ -76,18 +76,24 @@ compsep:
 
   # MCMC sampling groups: Metropolis-Hastings over the spectral indices of the selected
   # components. After each in-bounds proposal the CG groups named in `update_amplitude_groups` are re-solved,
-  # the chi2 over `chisq_bands` (all bands here) drives the accept/reject, and a rejected step reverts
+  # the chi^2 over `chisq_bands` (all bands here) drives the accept/reject, and a rejected step reverts
   # both the indices and all amplitudes. `numstep` MH steps are taken per Gibbs sweep.
   mcmc_sampling_groups:
     sample_spectral_indices:
       enabled: true
-      parameters: spectral_indices
-      comps: [Synchrotron, ThermalDust]
+      # The components the group samples, and the parameter of each. `proposal_sigma` is the
+      # step length in beta. `bounds` are hard limits (a proposal outside is rejected).
+      # `prior_mean` and `prior_rms` are an optional Gaussian prior (omit both for a flat prior).
+      sample:
+        dust:
+          beta: {proposal_sigma: 0.01, bounds: [1.0, 2.5], prior_mean: 1.56, prior_rms: 0.1}
+        sync:
+          beta: {proposal_sigma: 0.01, bounds: [-4.0, -2.0]}
       update_amplitude_groups: [sample_amps_CG]
       numstep: 1
 
       # chisq_bands: [Planck30GHz, WMAPKa, WMAPQ1, WMAPQ2, WMAPV1, WMAPV2, Planck857GHz, Planck353GHz]
-      # Optional: restrict the accept/reject chi2 to part of the sky (C3's
+      # Optional: restrict the accept/reject chi^2 to part of the sky (C3's
       # MCMC_SAMPLING_GROUP_CHISQ_MASK). One HEALPix file per group, applied to every band in the
       # group; ud_graded to each band's nside and thresholded at 0.5, with >0.5 meaning "keep".
       # This is a parameter-domain mask only -- it never enters the noise model or the amplitude
@@ -127,68 +133,44 @@ compsep:
 # COMPONENTS
 # ----------------------------------------
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      longname: "CMB"
-      shortname: "cmb"
       Cl_prior_amplitude: null  # No amplitude prior.
       lmax: 2048
-      spatially_varying_MM: False
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      longname: "Thermal-Dust"
-      shortname: "dust"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: 1.56
       T: 20
       nu_ref: 545.0
       lmax: 4096
-      spatially_varying_MM: False
-      # Spectral index samplign stuff.
-      sample_spectral_index: True
-      spectral_index_proposal_sigma: 0.01
-      spectral_index_bounds: [1.0, 2.5]  # hard uniform limits (rejected outside)
-      spectral_index_prior:              # optional soft Gaussian prior (omit for a flat prior)
-        type: "gaussian"
-        mean: 1.56
-        rms: 0.1
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      longname: "Synchrotron"
-      shortname: "sync"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: -3.1
       nu_ref: 30
       lmax: 1024
-      spatially_varying_MM: False
-      # Spectral index samplign stuff.
-      sample_spectral_index: True
-      spectral_index_proposal_sigma: 0.01
-      spectral_index_bounds: [-4.0, -2.0]
 
-  FreeFree:
+  ff:
     enabled: false
     component_class: "FreeFree"
     params:
       polarization: "I"
-      longname: "Free-Free"
-      shortname: "ff"
       Cl_prior_amplitude: null  # No amplitude prior.
       T: 7000
       nu_ref: 40
       lmax: 1024
-      spatially_varying_MM: False
 
 # ----------------------------------------
 # EXPERIMENTS

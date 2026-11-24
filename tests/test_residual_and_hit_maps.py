@@ -21,7 +21,7 @@ from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.pointing import PixelPointing
-from commander4.data_models.tod_samples import TODSamples
+from commander4.tod.samples import TODSamples
 import commander4.tod.processing as tod_processing
 import commander4.tod.mapmaking.tod2map as tod2map_module
 from commander4.tod.sky_projection import get_s_orb_tod
@@ -54,8 +54,8 @@ def _build_band(pix, psi, tod, flag=None,
         response_I_P=response_I_P,
     )
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
-    return DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=30.0, fwhm=0.0,
-                            fsamp=1.0, ndet=1, pols="IQU", noise_model=noise_model)
+    return DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=30.0,
+                            fwhm_arcmin=0.0, fsamp=1.0, ndet=1, pols="IQU", noise_model=noise_model)
 
 
 def _run(band: DetectorGroupTOD, sky_model: np.ndarray, sparse_maps: bool = False,
@@ -66,7 +66,7 @@ def _run(band: DetectorGroupTOD, sky_model: np.ndarray, sparse_maps: bool = Fals
     # As in a real run, the domain is built first and the sky model is handed over at its pixels.
     band.pixel_domain = PixelDomain.from_view(TODView(band, tod_samples), MPI.COMM_SELF,
                                               "sparse" if sparse_maps else "full", _NSIDE)
-    sky_local = band.pixel_domain.scatter_from_full(sky_model, ncomp=3)
+    sky_local = band.pixel_domain.scatter_from_full(sky_model, npol=3)
     _, maps = tod_processing.tod2map(band, tod_samples, sky_local, 1, params,
                                      np.random.default_rng(0))
     return maps
@@ -155,7 +155,7 @@ def test_response_split_detectors_recover_sky_and_zero_residual(monkeypatch):
     polarization.det_idx_fullband = 1
     band = DetectorGroupTOD(
         [ScanTOD([intensity, polarization], 0.0, 0)], "EXP", "B", nside=_NSIDE,
-        nu=30.0, fwhm=0.0, fsamp=1.0, ndet=2, pols="IQU",
+        nu=30.0, fwhm_arcmin=0.0, fsamp=1.0, ndet=2, pols="IQU",
         noise_model=SimpleNamespace(npar=1, params=np.array([np.nan])),
     )
 
@@ -168,6 +168,29 @@ def test_response_split_detectors_recover_sky_and_zero_residual(monkeypatch):
     expected_hits = np.zeros(_NPIX, dtype=np.int64)
     np.add.at(expected_hits, pix, 2)
     np.testing.assert_array_equal(maps["nhit"], expected_hits)
+
+
+def test_a_detector_scan_with_infinite_sigma0_is_rejected(monkeypatch):
+    """sigma0 = inf rejects the detector-scan, and the other detector alone makes the map."""
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    rng = np.random.default_rng(18)
+    n = 256
+    pix = rng.integers(0, _NPIX, n).astype(np.int64)
+    psi = rng.uniform(0.0, np.pi, n)
+    sky = rng.normal(scale=50.0, size=(3, _NPIX))
+    good = _build_band(pix, psi, _GAIN*_project(sky, pix, psi)).scans[0].detectors[0]
+    bad = _build_band(pix, psi, np.full(n, 1e3)).scans[0].detectors[0]
+    bad.name, bad.det_idx_fullband = "bad", 1
+    band = DetectorGroupTOD([ScanTOD([good, bad], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=30.0,
+                            fwhm_arcmin=0.0, fsamp=1.0, ndet=2, pols="IQU",
+                            noise_model=SimpleNamespace(npar=1, params=np.array([np.nan])))
+    tod_samples = fake_tod_samples(band, sigma0=2.0, abs_gain=_GAIN)
+    tod_samples.noise.noise_params[0, 1, 0] = np.inf
+
+    maps = _run(band, sky, tod_samples=tod_samples)
+
+    np.testing.assert_array_equal(tod_samples.selection.accept, [[True, False]])
+    np.testing.assert_allclose(maps["observed_sky"], sky, rtol=0, atol=1e-3)
 
 
 def test_residual_map_recovers_an_injected_offset(monkeypatch):
@@ -271,18 +294,18 @@ def test_intensity_mapmaker_recovers_signal_rms_and_aux_maps(
                               hit_maps=True, cov_maps=True)
     band.pixel_domain = PixelDomain.from_view(TODView(band, samples), comm,
                                               "sparse" if sparse_maps else "full", _NSIDE)
-    detmaps, maps = tod2map_module.tod2map(
-        band, samples, band.pixel_domain.scatter_from_full(sky, ncomp=1), 1, params,
+    band_maps, maps = tod2map_module.tod2map(
+        band, samples, band.pixel_domain.scatter_from_full(sky, npol=1), 1, params,
         np.random.default_rng(0))
     if band.nscans:
         np.testing.assert_allclose(samples.diagnostics.residual_tods[0][0],
                                    _GAIN * response_I * offset, atol=2e-4)
     if comm.rank != 0:
-        assert detmaps == maps == {}
+        assert band_maps == maps == {}
         return
 
     observed = counts > 0
-    assert set(detmaps) == {"I"}
+    assert set(band_maps) == {"I"}
     for name in ("observed_sky", "res", "corrnoise", "orbdipole", "sidelobe"):
         assert maps[name].shape == (3, _NPIX)
         np.testing.assert_array_equal(maps[name][1:], 0.0)

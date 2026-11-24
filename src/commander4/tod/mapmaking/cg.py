@@ -23,12 +23,13 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.backend import mapmaker as cpp_mapmaker
+from commander4.diagnostics.performance import benchmark
 from commander4.tod.view import TODView
 from commander4.math_utils.cg_driver import DistributedCG
 from commander4.tod.mapmaking.preconditioners import InvNPreconditionerI,\
     BlockInvNPreconditionerIQU
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
-from commander4.data_models.tod_samples import TODSamples
+from commander4.tod.samples import TODSamples
 from commander4.math_utils.arithmetic import inplace_scale, dot, norm
 from commander4.math_utils.fft import forward_rfft, backward_rfft
 from commander4.math_utils.transfer_func import SinglePole
@@ -74,9 +75,8 @@ class CGMapmaker:
         self.T_omega = (SinglePole(detector_tod.tf_tau_sec).response
                         if detector_tod.tf_tau_sec is not None else None)
         self.W_mat = W_mat
-        # Native sampling rate [Hz] of the mapmaking TODs, so the transfer function T_omega(omega) is
-        # evaluated on a physical-frequency grid (a `tau` in seconds means seconds, not samples). The
-        # CG's own noise model is white, so unlike apply_N_inv this rate is only needed for apply_T.
+        # Native sampling rate [Hz], so the transfer function T_omega is evaluated on a physical
+        # frequency grid (a `tau` in seconds means seconds, not samples).
         self.fsamp = detector_tod.fsamp
         self.CG_maxiter = params.tod_processing.cg_mapmaker.max_iter
         self.CG_tol = params.tod_processing.cg_mapmaker.err_tol
@@ -156,14 +156,14 @@ class CGMapmaker:
         length ``2N`` (``x -> [x, x[::-1]]``), ``H = T_omega`` is the filter evaluated on the ``2N``
         frequency grid, and ``R`` restricts back to the first ``N`` samples. The grid is in physical
         Hz (``rfftfreq(2N, d=1/fsamp)``), so ``T_omega`` sees true frequencies and a time constant
-        is in seconds, not samples. Mirroring makes the scan boundary continuous so a causal ``H`` does
-        not wrap the scan's end onto its start (matching ``apply_N_inv`` and the simulator that bakes
-        ``H`` in).
+        is in seconds, not samples. Mirroring makes the scan boundary continuous so a causal ``H``
+        does not wrap the scan's end onto its start (matching ``apply_N_inv`` and the simulator that
+        bakes ``H`` in).
 
         The transpose is ``T^T = E^T F^-1 diag(H*) F R^T``: ``R^T`` zero-pads (``x -> [x, 0]``), the
         filter is **conjugated** (``H*``; a frequency flip is *not* the transpose for a non-trivial
-        ``H``), and ``E^T`` folds the mirror back (``v -> v[:N] + v[N:][::-1]``). Implementing the two
-        directions as this exact adjoint pair keeps the mapmaking operator ``P^T T^T N^-1 T P``
+        ``H``), and ``E^T`` folds the mirror back (``v -> v[:N] + v[N:][::-1]``). Implementing the
+        two directions as this exact adjoint pair keeps the mapmaking operator ``P^T T^T N^-1 T P``
         symmetric, so the CG solve stays well-posed. At ``T_omega = 1`` both reduce to the identity.
         """
         if self.T_omega is None:
@@ -179,27 +179,15 @@ class CGMapmaker:
         out = backward_rfft(forward_rfft(ext, nthreads=self.nthreads) * filt, 2 * n,
                             nthreads=self.nthreads)
         if adjoint:
-            return out[:n] + out[n:][::-1]                                    # E^T: fold the mirror back
-        return np.ascontiguousarray(out[:n])                                 # R: keep the first N samples
+            return out[:n] + out[n:][::-1]                     # E^T: fold the mirror back
+        return np.ascontiguousarray(out[:n])                  # R: keep the first N samples
 
     def apply_T(self, scan_tod_arr):
-        """Apply the transfer-function operator ``T = R F^-1 diag(T_omega) F E`` to one scan.
-
-        ``T_omega`` is the (Hermitian-symmetric) filter ``H(omega)``; the mirrored FFT (reflect-extend
-        to ``2N``, filter, keep the first ``N`` samples) suppresses boundary wrap-around. Returns a new
-        array of the same length; see ``_apply_T`` for the full definition.
-        """
+        """Return the transfer function ``T`` applied to one scan (see ``_apply_T``)."""
         return self._apply_T(scan_tod_arr, adjoint=False)
 
     def apply_T_adjoint(self, scan_tod_arr):
-        """Apply the transpose ``T^T`` of the transfer-function operator to one scan.
-
-        This is the exact numerical transpose of ``apply_T``: zero-pad, filter with the **conjugated**
-        symbol ``T_omega*``, and fold the mirror back (``v -> v[:N] + v[N:][::-1]``). Conjugating the
-        filter (rather than flipping the frequency array) is what makes it the true adjoint for a
-        non-trivial ``T_omega``, and hence keeps ``P^T T^T N^-1 T P`` symmetric. Returns a new array
-        of the same length; see ``_apply_T``.
-        """
+        """Return the transpose ``T^T`` of the transfer function applied to one scan."""
         return self._apply_T(scan_tod_arr, adjoint=True)
 
     def apply_W(self, scan_tod_arr):
@@ -221,6 +209,7 @@ class CGMapmaker:
         """
         return self.apply_W(scan_tod_arr)
 
+    @benchmark("cg-rhs")
     def accum_to_RHS(self, view: TODView, scan_tod_arr: NDArray):
         """Add one detector-scan's contribution P^T T^T W^T N^-1 d to the right-hand side.
 
@@ -315,6 +304,7 @@ class CGMapmaker:
         # Sum the local contributions back to the full-sky map on the master (None on other ranks).
         return self.domain.reduce_to_full(out_local)
 
+    @benchmark("cg-solve")
     def solve(self, map_cov: NDArray | None, x_true=None):
         """Sum the right-hand side onto the master and solve for the sky map there (collective).
 
@@ -332,12 +322,13 @@ class CGMapmaker:
         ismaster = self.map_comm.Get_rank() == 0
         # Only the master runs the CG arithmetic, so only it needs the preconditioner.
         if ismaster:
-            M = (BlockInvNPreconditionerIQU(map_cov) if self._ncomp == 3
-                 else InvNPreconditionerI(map_cov))
+            precond = (BlockInvNPreconditionerIQU(map_cov) if self._ncomp == 3
+                       else InvNPreconditionerI(map_cov))
         else:
-            M = None
+            precond = None
 
-        CG_solver = DistributedCG(self.apply_LHS, RHS_map, ismaster, M=M, destroy_b=True)
+        CG_solver = DistributedCG(self.apply_LHS, RHS_map, ismaster, precond=precond,
+                                  destroy_b=True)
 
         # Every collective below has to be entered by all ranks, so the two conditions guarding one
         # are made rank-independent up front: the iteration index already is, and whether a true

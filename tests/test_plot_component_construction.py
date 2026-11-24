@@ -15,10 +15,7 @@ def _cmb_params() -> Bunch:
         component_class="CMB",
         params=Bunch(
             polarization="IQU",
-            longname="CMB",
-            shortname="cmb",
             lmax=11,
-            spatially_varying_MM=False,
             Cl_prior_amplitude=None,
         ),
     )
@@ -29,7 +26,7 @@ def _cmb_params() -> Bunch:
 def test_plotter_uses_live_component_lmax_and_polarization_views() -> None:
     components = _build_component_list(_cmb_params())
 
-    assert [item.eval_pol for item in components] == ["I", "QU"]
+    assert [item.pol for item in components] == ["I", "QU"]
     assert [item.lmax for item in components] == [11, 11]
     assert [item.comp_name for item in components] == ["CMB", "CMB"]
 

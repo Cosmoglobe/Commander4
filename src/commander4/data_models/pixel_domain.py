@@ -21,7 +21,7 @@ NUMPY_TO_MPI_DTYPE = {np.dtype(np.float64): MPI.DOUBLE, np.dtype(np.float32): MP
 #
 # Commander4 builds each band map collaboratively: every rank accumulates the contributions of its
 # own detector-scans into a map, and the contributions are summed onto the band master, which holds
-# the full-sky result. The naive layout gives every rank a full-sky (ncomp, npix) buffer even when
+# the full-sky result. The naive layout gives every rank a full-sky (npol, npix) buffer even when
 # its scans only ever touch a small fraction of the sky. ``PixelDomain`` factors out the pixel
 # bookkeeping and the reduction/scatter MPI so the per-rank buffers can instead hold only the pixels
 # that rank observes ("sparse" mode), while the master still ends up with a full-sky map.
@@ -34,7 +34,7 @@ NUMPY_TO_MPI_DTYPE = {np.dtype(np.float64): MPI.DOUBLE, np.dtype(np.float32): MP
 #               local index in a hash table built once from ``local_pix`` (see
 #               ``build_pixel_hash`` in ``mapmaker_pymod.cc``), so its cost per sample does not
 #               depend on how many pixels the rank holds or how they are ordered.
-#               Local buffers are (ncomp, n_local). Reduction is a ``Gatherv`` of the local data to
+#               Local buffers are (npol, n_local). Reduction is a ``Gatherv`` of the local data to
 #               the master followed by a scatter-add into the full-sky map; the symmetric scatter
 #               (master -> ranks, for the CG LHS) is a ``Scatterv`` of the per-rank pixel slices.
 #               Each rank sends and receives its values sorted by global pixel, so the master walks
@@ -49,9 +49,9 @@ class DistributedMap:
     """A full-sky map as the ranks of a band hold it, such as the band's realized sky model.
 
     Attributes:
-        local: The map at this rank's local pixels, ``(ncomp, n_local)``, held by every rank. This
+        local: The map at this rank's local pixels, ``(npol, n_local)``, held by every rank. This
             is the form to index with the local pointing (``PixelDomain.to_local``).
-        full: The full-sky map, ``(ncomp, npix)``, on the band master; ``None`` on other ranks.
+        full: The full-sky map, ``(npol, npix)``, on the band master; ``None`` on other ranks.
     """
     local: NDArray
     full: NDArray | None
@@ -148,8 +148,8 @@ class PixelDomain:
     def reduce_to_full(self, local_data: NDArray, root: int = 0) -> NDArray | None:
         """Sum the per-rank local buffers into a full-sky map on ``root`` (else return ``None``).
 
-        Accepts a 1-D ``(n_local,)`` buffer (scalar maps) or a 2-D ``(ncomp, n_local)`` buffer; the
-        returned full-sky map matches the input rank (``(npix,)`` or ``(ncomp, npix)``).
+        Accepts a 1-D ``(n_local,)`` buffer (scalar maps) or a 2-D ``(npol, n_local)`` buffer; the
+        returned full-sky map matches the input rank (``(npix,)`` or ``(npol, npix)``).
         """
         rank = self.comm.Get_rank()
         if self.mode == "full":
@@ -159,12 +159,12 @@ class PixelDomain:
 
         is_1d = local_data.ndim == 1
         data2d = local_data.reshape(1, -1) if is_1d else local_data
-        ncomp = data2d.shape[0]
+        npol = data2d.shape[0]
         counts, displs = self._recvcounts, self._displs
         if rank == root:
-            full = np.zeros((ncomp, self.npix), dtype=np.float64)
+            full = np.zeros((npol, self.npix), dtype=np.float64)
             recv = np.empty(int(counts.sum()), dtype=np.float64)
-        for c in range(ncomp):
+        for c in range(npol):
             # Sent sorted by global pixel, matching _all_pix (see the module comment).
             send = np.ascontiguousarray(data2d[c][self._sorted], dtype=np.float64)
             recvbuf = [recv, counts, displs, MPI.DOUBLE] if rank == root else None
@@ -176,26 +176,26 @@ class PixelDomain:
             return None
         return full[0] if is_1d else full
 
-    def scatter_from_full(self, full_data: NDArray | None, ncomp: int, root: int = 0,
+    def scatter_from_full(self, full_data: NDArray | None, npol: int, root: int = 0,
                           dtype=np.float64) -> NDArray:
         """Send each rank the values of a full-sky map at its local pixels (inverse of reduce).
 
         Used by the CG LHS (full map -> per-rank operator slice) and by the sky-model distribution.
-        Returns an ``(ncomp, n_local)`` buffer on every rank. In full mode this is a plain broadcast
+        Returns an ``(npol, n_local)`` buffer on every rank. In full mode this is a plain broadcast
         of the full-sky map. ``dtype`` selects the float precision of the exchanged buffers.
         """
         rank = self.comm.Get_rank()
         if self.mode == "full":
             buf = np.ascontiguousarray(full_data, dtype=dtype) if rank == root \
-                else np.empty((ncomp, self.npix), dtype=dtype)
+                else np.empty((npol, self.npix), dtype=dtype)
             self.comm.Bcast(buf, root=root)
             return buf
 
         counts, displs = self._recvcounts, self._displs
         mpi_dtype = NUMPY_TO_MPI_DTYPE[np.dtype(dtype)]
-        local = np.empty((ncomp, self.n_local), dtype=dtype)
+        local = np.empty((npol, self.n_local), dtype=dtype)
         received = np.empty(self.n_local, dtype=dtype)
-        for c in range(ncomp):
+        for c in range(npol):
             if rank == root:
                 # Gather the full map at the concatenated per-rank pixels, then scatter the slices.
                 send = np.ascontiguousarray(full_data[c][self._all_pix], dtype=dtype)

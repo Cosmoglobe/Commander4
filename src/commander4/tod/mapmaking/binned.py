@@ -13,6 +13,7 @@ from numpy.typing import NDArray
 
 from commander4.backend import mapmaker as cpp_mapmaker
 from commander4.data_models.pixel_domain import PixelDomain
+from commander4.diagnostics.performance import benchmark
 
 
 class BinnedMapmaker:
@@ -31,6 +32,9 @@ class BinnedMapmaker:
 
     ncomp is 1 for an I-only band and 3 (I, Q, U) otherwise. A pixel that cannot be solved, because
     it is unobserved or seen at too few polarization angles, gets 0 in `map_inv_var` and `maps`.
+
+    The accumulations will add lots of small numbers to big ones, so they happen in float64.
+    When they are done we can convert all maps to float32 to save memory.
 
     `accumulate_Python` and `finalize_Python` do the same as `accumulate` and `finalize` in plain
     NumPy. They are slow, but show what the C++ kernels compute, and the tests compare the two.
@@ -90,6 +94,7 @@ class BinnedMapmaker:
         """Add one hit per sample to the hit map."""
         cpp_mapmaker.hit_accumulator(self._hits, np.asarray(pix_local, dtype=np.int64))
 
+    @benchmark("map-gather")
     def finalize(self):
         """Sum the buffers of all ranks onto the master and solve each pixel there (collective).
 

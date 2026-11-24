@@ -136,9 +136,9 @@ def test_cli_uses_component_lmax(
     """Carry the component cutoff and optional mask taper through chain loading and sampling."""
     monkeypatch.setattr(cr, "nthreads", 1)
     params = {
-        "components": {"CMB": {"enabled": True, "component_class": "CMB", "params": {
-            "polarization": "I", "shortname": "cmb", "lmax": lmax,
-            "spatially_varying_MM": False, "Cl_prior_amplitude": None,
+        "components": {"cmb": {"enabled": True, "component_class": "CMB", "params": {
+            "polarization": "I", "lmax": lmax,
+            "Cl_prior_amplitude": None,
         }}},
         "compsep": {"double_precision": True},
         "experiments": {"Sim": {"bands": {"Band100": {"freq": 100.0}}}},
@@ -434,14 +434,14 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
         bands[f"Band{band}"] = {"freq": 70.0 + 30.0*band}
     params = {
         "components": {
-            "CMB": {"enabled": True, "component_class": "CMB", "params": {
-                "polarization": "I", "shortname": "cmb", "lmax": lmax,
-                "spatially_varying_MM": False, "Cl_prior_amplitude": None,
+            "cmb": {"enabled": True, "component_class": "CMB", "params": {
+                "polarization": "I", "lmax": lmax,
+                "Cl_prior_amplitude": None,
             }},
-            "Dust": {"enabled": True, "component_class": "ThermalDust", "params": {
-                "polarization": "I", "shortname": "dust", "lmax": lmax,
-                "spatially_varying_MM": False, "Cl_prior_amplitude": None,
-                "nu_ref": 100.0, "beta": 1.54, "T": 20.0, "sample_spectral_index": True,
+            "dust": {"enabled": True, "component_class": "ThermalDust", "params": {
+                "polarization": "I", "lmax": lmax,
+                "Cl_prior_amplitude": None,
+                "nu_ref": 100.0, "beta": 1.54, "T": 20.0,
             }},
         },
         "compsep": {"double_precision": True},
@@ -591,14 +591,14 @@ def test_cli_uses_thermodynamic_units_throughout(
     cmb_ref = 217.0  # A reference far from the RJ limit also exposes spectrum-unit errors.
     params = {
         "components": {
-            "CMB": {"enabled": True, "component_class": "CMB", "params": {
-                "polarization": "I", "shortname": "cmb", "lmax": lmax, "nu_ref": cmb_ref,
-                "spatially_varying_MM": False, "Cl_prior_amplitude": None,
+            "cmb": {"enabled": True, "component_class": "CMB", "params": {
+                "polarization": "I", "lmax": lmax, "nu_ref": cmb_ref,
+                "Cl_prior_amplitude": None,
             }},
-            "Dust": {"enabled": True, "component_class": "ThermalDust", "params": {
-                "polarization": "I", "shortname": "dust", "lmax": lmax,
+            "dust": {"enabled": True, "component_class": "ThermalDust", "params": {
+                "polarization": "I", "lmax": lmax,
                 "nu_ref": 353.0, "beta": 1.54, "T": 20.0,
-                "spatially_varying_MM": False, "Cl_prior_amplitude": None,
+                "Cl_prior_amplitude": None,
             }},
         },
         "compsep": {"double_precision": True},
@@ -626,11 +626,7 @@ def test_cli_uses_thermodynamic_units_throughout(
         handle["comps/dust/sed/nu_ref"] = 353.0
         handle["comps/dust/amp_fwhm_arcmin"] = 0.0
     components = cr._build_intensity_components(as_bunch_recursive(params), str(chain_path))
-    foregrounds = []
-    for component in components:
-        if not isinstance(component, cr.CMB):
-            foregrounds.append(component)
-    foreground_sky = cr.SkyModel(foregrounds)
+    foregrounds = cr.CompList([comp for comp in components if not isinstance(comp, cr.CMB)])
     signal_maps = []
     ivar_maps = []
     beam_sizes = []
@@ -639,7 +635,7 @@ def test_cli_uses_thermodynamic_units_throughout(
         cmb_map = cr.alm2map(hp.almxfl(cmb_alm, hp.gauss_beam(beam, lmax=lmax)), nside, lmax)
         noise = np.linspace(-0.2, 0.2, npix)
         rms = np.linspace(0.5, 1.5, npix)
-        foreground_rj = foreground_sky.get_sky_at_nu(nu, nside, "I", fwhm=beam)[0]
+        foreground_rj = foregrounds.get_sky_at_nu(nu, nside, "I", fwhm_rad=beam)[0]
         observed_cmb = cmb_map + noise + foreground_rj.astype(float) * rj_to_band_unit_factor(
             nu, "uK_CMB")
         unit = stored_unit
@@ -707,23 +703,21 @@ def saved_component_sample(request: pytest.FixtureRequest, tmp_path: Path) -> tu
     """Write a real chain with SEDs different from the configuration and smoothed amplitudes."""
     lmax = 8
     components = {}
-    for name, shortname, component_class, sed in [
-        ("CMB", "cmb", "CMB", {"nu_ref": 1.0}),
-        ("Dust", "dust", "ThermalDust", {"nu_ref": 353.0, "beta": 1.54, "T": 20.0}),
-        ("Sync", "sync", "Synchrotron", {"nu_ref": 30.0, "beta": -3.1}),
+    for name, component_class, sed in [
+        ("cmb", "CMB", {"nu_ref": 1.0}),
+        ("dust", "ThermalDust", {"nu_ref": 353.0, "beta": 1.54, "T": 20.0}),
+        ("sync", "Synchrotron", {"nu_ref": 30.0, "beta": -3.1}),
     ]:
         components[name] = {"enabled": True, "component_class": component_class, "params": {
-            "polarization": request.param, "shortname": shortname, "lmax": lmax,
-            "spatially_varying_MM": False, "Cl_prior_amplitude": None, **sed,
+            "polarization": request.param, "lmax": lmax,
+            "Cl_prior_amplitude": None, **sed,
         }}
-    # Dust is sampled; sync is fixed. Offline restoration must use both saved states.
-    components["Dust"]["params"]["sample_spectral_index"] = True
     config = {"components": components, "compsep": {"double_precision": True},
               "output": {"dir": str(tmp_path), "chains": {"write": [1]}}}
     params = as_bunch_recursive(config)
     params.parameter_file_as_string = yaml.safe_dump(config)
     (tmp_path / "chains_compsep").mkdir()
-    comp_list = cr.CompList.init_from_params(params.components, params)
+    comp_list = cr.CompList.init_from_params(params)
     intrinsic = {}
     for comp in comp_list:
         alm = np.zeros(hp.Alm.getsize(lmax), dtype=complex)
@@ -731,21 +725,21 @@ def saved_component_sample(request: pytest.FixtureRequest, tmp_path: Path) -> tu
         alm[hp.Alm.getidx(lmax, 8, 3)] = 20.0 + 10.0j
         alm[hp.Alm.getidx(lmax, 4, 0)] = 10.0
         amp_fwhm = np.radians(6.0)
-        if comp.eval_pol == "I":
-            intrinsic[comp.shortname] = alm.copy()
+        if comp.pol == "I":
+            intrinsic[comp.comp_name] = alm.copy()
         else:
             alm *= 3.0  # Distinct QU amplitudes expose accidental row selection.
         comp.amps[:] = hp.almxfl(alm, hp.gauss_beam(amp_fwhm, lmax=lmax))
         comp.amp_fwhm_rad = amp_fwhm
-        if comp.shortname == "cmb":
-            comp.nu_ref = 100.0 if comp.eval_pol == "I" else 217.0
-        elif comp.shortname == "dust":
-            comp.nu_ref = 70.0 if comp.eval_pol == "I" else 353.0
-            comp.beta = 1.9 if comp.eval_pol == "I" else 1.3
-            comp.T = 24.0 if comp.eval_pol == "I" else 18.0
+        if comp.comp_name == "cmb":
+            comp.nu_ref = 100.0 if comp.pol == "I" else 217.0
+        elif comp.comp_name == "dust":
+            comp.nu_ref = 70.0 if comp.pol == "I" else 353.0
+            comp.beta = 1.9 if comp.pol == "I" else 1.3
+            comp.T = 24.0 if comp.pol == "I" else 18.0
         else:
-            comp.nu_ref = 40.0 if comp.eval_pol == "I" else 30.0
-            comp.beta = -2.6 if comp.eval_pol == "I" else -3.3
+            comp.nu_ref = 40.0 if comp.pol == "I" else 30.0
+            comp.beta = -2.6 if comp.pol == "I" else -3.3
     write_compsep_chain_to_file(comp_list, params, chain=1, iter=1)
     chain_path = str(tmp_path / "chains_compsep/chain01_iter0001.h5")
     return params, chain_path, intrinsic
@@ -759,11 +753,11 @@ def test_component_restoration_matches_saved_seds_and_beams(saved_component_samp
                      "dust": {"nu_ref": 70.0, "beta": 1.9, "T": 24.0},
                      "sync": {"nu_ref": 40.0, "beta": -2.6}}
     for comp in restored:
-        assert comp.eval_pol == "I"
+        assert comp.pol == "I"
         assert comp.amp_fwhm_rad == pytest.approx(np.radians(6.0))
-        for name, value in expected_seds[comp.shortname].items():
+        for name, value in expected_seds[comp.comp_name].items():
             assert getattr(comp, name) == pytest.approx(value)
-        expected_alm = hp.almxfl(intrinsic[comp.shortname], hp.gauss_beam(np.radians(6.0), lmax=8))
+        expected_alm = hp.almxfl(intrinsic[comp.comp_name], hp.gauss_beam(np.radians(6.0), lmax=8))
         np.testing.assert_allclose(comp.amps[0], expected_alm, atol=1e-12)
 
 
@@ -799,7 +793,7 @@ def test_iteration_subtracts_saved_foregrounds_without_double_smoothing(
         expected_maps.append(expected)
     loaded = cr._load_iteration(params, 1, chain_path, band_files, band_freqs)
     for actual, expected in zip(loaded.signal_maps, expected_maps):
-        # SkyModel accumulates foregrounds in float32.
+        # `get_sky_at_nu` accumulates foregrounds in float32.
         np.testing.assert_allclose(actual, expected, rtol=0, atol=5e-5)
     stored_cmb = hp.almxfl(intrinsic["cmb"], hp.gauss_beam(np.radians(6.0), lmax=8))
     np.testing.assert_allclose(loaded.cmb_alms,

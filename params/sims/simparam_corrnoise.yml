@@ -113,14 +113,13 @@ compsep:
   cg_sampling_groups:
     sample_amps_CG:
       enabled: true
-      comps: [CMB]
+      comps: [cmb]
       bands: [Band100GHz]
       optimize: false   # was compsep.sample_amplitudes: true
       max_iter: 200
       max_iter_pol: 200
       err_tol: 0.0
       preconditioner: JointPreconditioner
-      dense_matrix_debug_mode: false
 
   mcmc_sampling_groups: {}
 
@@ -134,23 +133,20 @@ compsep:
 # COMPONENTS
 # ----------------------------------------
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      longname: "CMB"
-      shortname: "cmb"
       # Start the chain at the simulated sky, so the very first TOD iteration already has the right
       # sky model and n_corr never sees an unsubtracted signal.  This is simgen's component truth
       # map: the input amplitude at nu_ref (1 GHz for the CMB) in uK_RJ, so `units` is the identity.
-      init_from: "../c4_sims/simgen_corrnoise_debug/truth_CMB.fits"
+      init_from: "../c4_sims/simgen_corrnoise_debug/truth_cmb.fits"
       units: "uK_RJ"
       Cl_prior_amplitude: [1.0e+6, 1.0e+4]  # D_l at l_pivot [I, QU]; a loose roof, not a fit prior.
       Cl_prior_beta: [0.0, -0.5]
       Cl_prior_l_pivot: 20
       lmax: 191
-      spatially_varying_MM: False
 
 # ----------------------------------------
 # EXPERIMENTS

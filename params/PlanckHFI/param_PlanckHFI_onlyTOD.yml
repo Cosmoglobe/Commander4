@@ -61,7 +61,7 @@ output:
       hit_maps: True        # maps/nhit: per-pixel count of unflagged samples.
       cov_maps: True       # maps/cov: the 6 unique elements of P^T N^-1 P, of which only the
                             # inverse diagonal survives as maps/rms. Six full-sky float64 maps.
-      chisq_map: True       # chi2/map in the compsep chain (C3 chisq_<postfix>.fits).
+      chisq_map: True       # chisq/map in the compsep chain (C3 chisq_<postfix>.fits).
       compsep_residual_maps: True  # residuals/<band>_<pol>: full-resolution per-band residuals
                             # (C3 res_<band>_<postfix>.fits). Gathers every band map onto the
                             # compsep master, so it is memory-heavy.
@@ -133,25 +133,20 @@ compsep: {}
 # COMPONENTS
 # ----------------------------------------
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      longname: "CMB"
-      shortname: "cmb"
       init_from: "/mn/stornext/d5/data/duncanwa/WMAP/data/COM_CMB_IQU-smica_2048_R3.00_full_uK_14amin_dip.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
       lmax: 1024
-      spatially_varying_MM: False
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      longname: "Thermal-Dust"
-      shortname: "dust"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: 1.56
@@ -159,37 +154,30 @@ components:
       nu_ref: [857, 353]  # [I, QU]
       units: "uK_RJ"
       lmax: 1024
-      spatially_varying_MM: False
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      longname: "Synchrotron"
-      shortname: "sync"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: -3.1
       nu_ref: [0.408, 30]  # [I, QU]
       units: "uK_RJ"
       lmax: 512
-      spatially_varying_MM: False
 
-  FreeFree:
+  ff:
     enabled: true
     component_class: "FreeFree"
     params:
       polarization: "I"
-      longname: "Free-Free"
-      shortname: "ff"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_ff_amp_BP8.1_v1.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
       T: 7000
       nu_ref: 40
       units: "uK_RJ"
       lmax: 512
-      spatially_varying_MM: False
 
 
 # ----------------------------------------

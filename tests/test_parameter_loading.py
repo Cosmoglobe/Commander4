@@ -55,6 +55,17 @@ def test_import_adds_its_keys_to_the_surrounding_mapping(tmp_path) -> None:
                                      "LFI30": {"freq": 28.4}}}
 
 
+def test_a_key_given_twice_in_one_mapping_is_rejected(tmp_path) -> None:
+    """PyYAML alone keeps the last of two equal keys. Here the second `WMAPKa` comes from an
+    imported file, and the error names that file and line."""
+    (tmp_path / "wmap.yml").write_text("WMAPKa:\n  freq: 33.0\n", encoding="utf-8")
+    (tmp_path / "params.yml").write_text(
+        "bands:\n  WMAPKa:\n    freq: 32.0\n  !import wmap.yml\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"key 'WMAPKa' is given twice, in .*wmap.yml line 1"):
+        load_params(str(tmp_path / "params.yml"))
+
+
 def test_nested_imports_resolve_relative_to_their_own_file(tmp_path) -> None:
     """A file pulled in by !import may itself !import, using paths relative to its own directory."""
     (tmp_path / "sub").mkdir()

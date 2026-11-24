@@ -93,7 +93,7 @@ def test_valid_file_reports_task_count_and_sampling_groups(tmp_path) -> None:
 
     task_summary, groups = validate_parameter_file(_write_params(tmp_path, params))
 
-    assert task_summary == "at least 2 = 1 TOD + 1 CompSep-I + 0 CompSep-QU"
+    assert task_summary == "at least 2 = 1 TOD + 1 CompSep"
     assert groups == ["cg_sampling_groups.amplitudes"]
 
 
@@ -105,7 +105,7 @@ def test_command_prints_a_submission_ready_summary(tmp_path, monkeypatch, capsys
 
     output = capsys.readouterr().out
     assert f"Valid parameter file: {parameter_file}" in output
-    assert "MPI tasks: at least 1 = 1 TOD + 0 CompSep-I + 0 CompSep-QU" in output
+    assert "MPI tasks: at least 1 = 1 TOD + 0 CompSep" in output
     assert "Enabled sampling groups: none" in output
 
 
@@ -273,5 +273,5 @@ def test_a_file_with_no_enabled_work_is_rejected(tmp_path) -> None:
     params = _valid_params()
     params["experiments"]["Example"]["enabled"] = False
 
-    with pytest.raises(ValueError, match="enables no TOD bands or CompSep views"):
+    with pytest.raises(ValueError, match="enables no TOD bands or CompSep polbands"):
         validate_parameter_file(_write_params(tmp_path, params))

@@ -140,8 +140,8 @@ def _extract_chain_iter(filename: str) -> tuple[int | None, int | None]:
 
 
 def _build_component_list(params: Bunch) -> list[Component]:
-    """Build the same component execution views used by the live CompSep pipeline."""
-    return list(CompList.init_from_params(params.components, params))
+    """Build the same component polarization views used by the live CompSep pipeline."""
+    return list(CompList.init_from_params(params))
 
 
 def _match_band_info(
@@ -230,11 +230,11 @@ def _band_is_selected(
     return bool(candidates & band_filter)
 
 
-def _compsep_band_is_selected(view_name: str, band_filter: set[str] | None) -> bool:
+def _compsep_band_is_selected(polband_name: str, band_filter: set[str] | None) -> bool:
     if band_filter is None:
         return True
-    band_name = re.sub(r"_(I|QU)$", "", view_name)
-    return view_name in band_filter or band_name in band_filter or any(
+    band_name = re.sub(r"_(I|QU)$", "", polband_name)
+    return polband_name in band_filter or band_name in band_filter or any(
         name.endswith(f"_{band_name}") for name in band_filter
     )
 
@@ -1452,7 +1452,7 @@ def _plot_compsep_diagnostics(
     plot_count = 0
     # Scalar traces contain every iteration and deliberately ignore --iter.
     for chain, group_entries in _group_compsep_entries(entries).items():
-        scalar_paths = {"chi2/reduced", "chi2/z"}
+        scalar_paths = {"chisq/reduced", "chisq/z"}
         scalar_paths.update(_small_dataset_paths(group_entries, "mcmc"))
         for dataset_path in sorted(scalar_paths):
             category = dataset_path.split("/", 1)[0]
@@ -1467,37 +1467,37 @@ def _plot_compsep_diagnostics(
                 filename_prefix=f"chain{chain:02d}_",
             )
 
-        views = set()
+        polbands = set()
         for entry in group_entries:
             try:
                 with h5py.File(entry.path, "r") as handle:
-                    if "chi2/bands" in handle:
-                        views.update(handle["chi2/bands"].keys())
+                    if "chisq/bands" in handle:
+                        polbands.update(handle["chisq/bands"].keys())
             except OSError:
                 continue
         for polarization in ("I", "QU"):
             series = []
-            for view_name in sorted(views):
-                if not view_name.endswith(f"_{polarization}"):
+            for polband_name in sorted(polbands):
+                if not polband_name.endswith(f"_{polarization}"):
                     continue
-                if not _compsep_band_is_selected(view_name, band_filter):
+                if not _compsep_band_is_selected(polband_name, band_filter):
                     continue
                 iterations = []
-                reduced_chi2 = []
-                path = f"chi2/bands/{view_name}/reduced"
+                reduced_chisq = []
+                path = f"chisq/bands/{polband_name}/reduced"
                 for entry in group_entries:
                     try:
                         with h5py.File(entry.path, "r") as handle:
                             if path in handle:
                                 iterations.append(entry.iteration)
-                                reduced_chi2.append(float(handle[path][()]))
+                                reduced_chisq.append(float(handle[path][()]))
                     except OSError:
                         continue
-                series.append((view_name.removesuffix(f"_{polarization}"),
-                               np.asarray(iterations), np.asarray(reduced_chi2)))
-            chi2_folder = _category_folder(output_dir, "compsep_traces", "chi2")
+                series.append((polband_name.removesuffix(f"_{polarization}"),
+                               np.asarray(iterations), np.asarray(reduced_chisq)))
+            chisq_folder = _category_folder(output_dir, "compsep_traces", "chisq")
             filename = os.path.join(
-                chi2_folder,
+                chisq_folder,
                 f"chain{chain:02d}_per_band_reduced_{polarization}.png",
             )
             plotting.plot_chain_lines(
@@ -1572,22 +1572,22 @@ def _plot_compsep_maps(
         try:
             with h5py.File(entry.path, "r") as handle:
                 map_groups: list[tuple[str, np.ndarray, str, str]] = []
-                if "chi2/map" in handle:
-                    chi2_map = _resample_map(handle["chi2/map"][()], nside_out, "count")
-                    map_groups.append(("chi2", chi2_map, "Compsep chi-squared", "$z^2$"))
+                if "chisq/map" in handle:
+                    chisq_map = _resample_map(handle["chisq/map"][()], nside_out, "count")
+                    map_groups.append(("chisq", chisq_map, "Compsep chi-squared", r"$\chi^2$"))
                 if "residuals" in handle:
-                    for view_name in handle["residuals"]:
-                        if not _compsep_band_is_selected(view_name, band_filter):
+                    for polband_name in handle["residuals"]:
+                        if not _compsep_band_is_selected(polband_name, band_filter):
                             continue
                         residual_map = _resample_map(
-                            handle[f"residuals/{view_name}"][()], nside_out, "brightness"
+                            handle[f"residuals/{polband_name}"][()], nside_out, "brightness"
                         )
                         map_groups.append((
-                            f"residual_{view_name}", residual_map,
-                            f"Compsep residual {view_name}", "uK_RJ",
+                            f"residual_{polband_name}", residual_map,
+                            f"Compsep residual {polband_name}", "uK_RJ",
                         ))
                 for map_name, map_rows, map_title, unit in map_groups:
-                    category = "chi2" if map_name == "chi2" else "residuals"
+                    category = "chisq" if map_name == "chisq" else "residuals"
                     out_folder = _category_folder(output_dir, "maps_compsep", category)
                     row_labels = _map_row_labels("map", map_rows.shape[0])
                     filename = os.path.join(
@@ -1601,7 +1601,7 @@ def _plot_compsep_maps(
                         map_rows,
                         row_labels,
                         unit=unit,
-                        symmetric=[map_name != "chi2"] * len(row_labels),
+                        symmetric=[map_name != "chisq"] * len(row_labels),
                     )
                     plot_count += int(os.path.isfile(filename))
         except OSError as error:
