@@ -31,7 +31,6 @@ from commander4.tod.mapmaking.preconditioners import InvNPreconditionerI,\
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.tod.samples import TODSamples
 from commander4.math_utils.arithmetic import inplace_scale, dot, norm
-from commander4.math_utils.fft import forward_rfft, backward_rfft
 from commander4.math_utils.transfer_func import AsymmetricTransferFunction
 
 
@@ -150,42 +149,8 @@ class CGMapmaker:
         scan_tod_arr[~good_mask] = 0.0
         return scan_tod_arr
 
-    # def _apply_T(self, scan_tod_arr, adjoint=False):
-    #     """Apply the transfer-function operator T (or its transpose T^T) to one scan; returns a new
-    #     length-N array.
-
-    #     The forward operator is ``T = R F^-1 diag(H) F E`` where ``E`` reflect-extends the scan to
-    #     length ``2N`` (``x -> [x, x[::-1]]``), ``H = T_omega`` is the filter evaluated on the ``2N``
-    #     frequency grid, and ``R`` restricts back to the first ``N`` samples. The grid is in physical
-    #     Hz (``rfftfreq(2N, d=1/fsamp)``), so ``T_omega`` sees true frequencies and a time constant
-    #     is in seconds, not samples. Mirroring makes the scan boundary continuous so a causal ``H``
-    #     does not wrap the scan's end onto its start (matching ``apply_N_inv`` and the simulator that
-    #     bakes ``H`` in).
-
-    #     The transpose is ``T^T = E^T F^-1 diag(H*) F R^T``: ``R^T`` zero-pads (``x -> [x, 0]``), the
-    #     filter is **conjugated** (``H*``; a frequency flip is *not* the transpose for a non-trivial
-    #     ``H``), and ``E^T`` folds the mirror back (``v -> v[:N] + v[N:][::-1]``). Implementing the
-    #     two directions as this exact adjoint pair keeps the mapmaking operator ``P^T T^T N^-1 T P``
-    #     symmetric, so the CG solve stays well-posed. At ``T_omega = 1`` both reduce to the identity.
-    #     """
-    #     if self.T_omega is None:
-    #         return np.ascontiguousarray(scan_tod_arr, dtype=np.float64)
-    #     n = scan_tod_arr.shape[-1]
-    #     freqs = np.fft.rfftfreq(2 * n, d=1.0 / self.fsamp)  # physical frequency grid [Hz]
-    #     if adjoint:
-    #         ext = np.concatenate([scan_tod_arr, np.zeros_like(scan_tod_arr)])  # R^T: zero-pad
-    #         filt = np.conj(self.T_omega(freqs))                               # H*
-    #     else:
-    #         ext = np.concatenate([scan_tod_arr, scan_tod_arr[::-1]])          # E: reflect-extend
-    #         filt = self.T_omega(freqs)                                        # H
-    #     out = backward_rfft(forward_rfft(ext, nthreads=self.nthreads) * filt, 2 * n,
-    #                         nthreads=self.nthreads)
-    #     if adjoint:
-    #         return out[:n] + out[n:][::-1]                     # E^T: fold the mirror back
-    #     return np.ascontiguousarray(out[:n])                  # R: keep the first N samples
-
     def apply_T(self, scan_tod_arr: NDArray, sky_model_tod: NDArray | None = None):
-        """Return the transfer function ``T`` applied to one scan (see ``_apply_T``)."""
+        """Return ``T`` applied to one scan (see ``TransferFunction.apply``)."""
         if self.TF is None:
             return scan_tod_arr
         else:
