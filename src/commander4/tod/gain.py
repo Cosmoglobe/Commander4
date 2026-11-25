@@ -129,7 +129,8 @@ class Gain(TODStep):
             cfg = read_settings(params, term, (f"experiments.{exp}.bands.{band}", "tod_processing"),
                                 {"enabled": False, "from_iter": 1,
                                  "calibrate_against": default_calibrator,
-                                 "downsample_time": 1.0, "mask_threshold": 0.5})
+                                 "downsample_time": 1.0, "mask_threshold": 0.5,
+                                 "white_noise_weights": False})
             if (cfg.enabled and cfg.calibrate_against == "orbital_dipole"
                     and experiment_data.nu > ORBITAL_DIPOLE_MAX_FREQ_GHZ
                     and band_comm.Get_rank() == 0 and chain == 1):
@@ -243,13 +244,16 @@ class Gain(TODStep):
                 calib = view.get_calib_tod("abs", gain_cfg.calibrate_against, rng)
                 # Whiten the calibrator and the residual with N^-1/2, and fit on the good blocks
                 # only: s^T N^-1 d becomes sum(mask * s_white * r_white). [C3's accumulate_abscal]
+                # With `white_noise_weights`, N is sigma0^2 alone, as in C3's HFI runs.
                 # The TODs are block-averaged, so their rate is fsamp/downsample_factor, which
                 # apply_N_inv needs to place the 1/f noise weight at the right frequencies.
                 gain_samprate = view.fsamp / view.downsample_factor
-                s_white = experiment_data.apply_N_inv(calib.s_cal, view.noise_params,
-                                                      samprate=gain_samprate, power=0.5)
-                r_white = experiment_data.apply_N_inv(calib.tod, view.noise_params,
-                                                      samprate=gain_samprate, power=0.5)
+                s_white = experiment_data.apply_N_inv(
+                    calib.s_cal, view.noise_params, samprate=gain_samprate, power=0.5,
+                    white_only=gain_cfg.white_noise_weights)
+                r_white = experiment_data.apply_N_inv(
+                    calib.tod, view.noise_params, samprate=gain_samprate, power=0.5,
+                    white_only=gain_cfg.white_noise_weights)
                 sum_s_T_N_inv_d += np.sum(calib.mask * s_white * r_white)
                 sum_s_T_N_inv_s += np.sum(calib.mask * s_white**2)
 
@@ -320,10 +324,12 @@ class Gain(TODStep):
                 # Whitened calibrator and residual, summed over the good blocks, as in
                 # `sample_absolute`.
                 gain_samprate = view.fsamp / view.downsample_factor
-                s_white = experiment_data.apply_N_inv(calib.s_cal, view.noise_params,
-                                                      samprate=gain_samprate, power=0.5)
-                r_white = experiment_data.apply_N_inv(calib.tod, view.noise_params,
-                                                      samprate=gain_samprate, power=0.5)
+                s_white = experiment_data.apply_N_inv(
+                    calib.s_cal, view.noise_params, samprate=gain_samprate, power=0.5,
+                    white_only=gain_cfg.white_noise_weights)
+                r_white = experiment_data.apply_N_inv(
+                    calib.tod, view.noise_params, samprate=gain_samprate, power=0.5,
+                    white_only=gain_cfg.white_noise_weights)
                 # Add the contribution from this scan to the local sum (full-band detector column).
                 local_s_T_N_inv_s[view.idet] += np.sum(calib.mask * s_white**2)
                 local_r_T_N_inv_s[view.idet] += np.sum(calib.mask * s_white * r_white)
@@ -421,10 +427,12 @@ class Gain(TODStep):
             # Whitened calibrator and residual, summed over the good blocks, as in
             # `sample_absolute`.
             gain_samprate = view.fsamp / view.downsample_factor
-            s_white = experiment_data.apply_N_inv(calib.s_cal, view.noise_params,
-                                                  samprate=gain_samprate, power=0.5)
-            r_white = experiment_data.apply_N_inv(calib.tod, view.noise_params,
-                                                  samprate=gain_samprate, power=0.5)
+            s_white = experiment_data.apply_N_inv(
+                calib.s_cal, view.noise_params, samprate=gain_samprate, power=0.5,
+                white_only=gain_cfg.white_noise_weights)
+            r_white = experiment_data.apply_N_inv(
+                calib.tod, view.noise_params, samprate=gain_samprate, power=0.5,
+                white_only=gain_cfg.white_noise_weights)
             A_qq_local[view.idet, view.iscan] = np.sum(calib.mask * s_white**2)
             b_q_local[view.idet, view.iscan] = np.sum(calib.mask * s_white * r_white)
 

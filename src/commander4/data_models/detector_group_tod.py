@@ -96,18 +96,19 @@ class DetectorGroupTOD:
                 yield iscan, det
 
     def apply_N_inv(self, tod: NDArray, noise_params: NDArray, samprate: float|None = None,
-                    inplace=False, power: float = 1.0) -> NDArray:
+                    inplace=False, power: float = 1.0, white_only: bool = False) -> NDArray:
         """ Applies the inverse noise covariance N^-1 of this Det-Group to the input TOD, using the
             specified noise parameters. If a sample rate is specified, the TOD is assumed to have
             been downsampled, and the noise level is scaled accordingly. The DC (mean) mode is
             projected out, matching the Commander3 ``multiply_inv_N`` convention. ``power`` applies
-            N^-power instead; 0.5 gives the whitening filter N^-1/2.
+            N^-power instead; 0.5 gives the whitening filter N^-1/2. ``white_only`` uses the
+            white-noise level sigma0 alone, ignoring the correlated part of the PSD.
         """
         actual_samprate = samprate if samprate is not None else self.fsamp
         tod_out = tod if inplace else np.zeros_like(tod)
 
         # White-noise fast path: P(f) = sigma0^2 (flat), so N^-1 is a scalar and the FFT is skipped.
-        if self.noise_model.is_white:
+        if self.noise_model.is_white or white_only:
             scale = float(noise_params[0])**2
             if samprate is not None and samprate != self.fsamp:
                 scale *= samprate/self.fsamp

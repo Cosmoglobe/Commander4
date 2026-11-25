@@ -120,12 +120,13 @@ def test_each_sampled_gain_term_warns_about_dipole_calibration(
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 @pytest.mark.parametrize("white_noise", [False, True])
+@pytest.mark.parametrize("white_weights", [False, True])
 def test_absolute_gain_is_fitted_to_the_whitened_good_blocks(
-    monkeypatch: pytest.MonkeyPatch, dtype: type, white_noise: bool,
+    monkeypatch: pytest.MonkeyPatch, dtype: type, white_noise: bool, white_weights: bool,
 ) -> None:
     """The gain mean and fluctuation come from the N^-1/2-whitened calibrator and residual,
     summed over the good blocks only, at the block-averaged sample rate (as C3's
-    `accumulate_abscal`)."""
+    `accumulate_abscal`). With `white_noise_weights`, N is the white-noise level alone."""
     from mpi4py import MPI
     from commander4.data_models.detector_group_tod import DetectorGroupTOD
     from commander4.tod.noise.psd import NoisePSDOof
@@ -146,14 +147,17 @@ def test_absolute_gain_is_fitted_to_the_whitened_good_blocks(
         views.append(SimpleNamespace(fsamp=180.0, downsample_factor=180,
                                      noise_params=noise_params,
                                      get_calib_tod=lambda *args, calib=calib: calib))
-        s_white = experiment.apply_N_inv(calibrator, noise_params, samprate=1.0, power=0.5)
-        r_white = experiment.apply_N_inv(residual, noise_params, samprate=1.0, power=0.5)
+        s_white = experiment.apply_N_inv(calibrator, noise_params, samprate=1.0, power=0.5,
+                                         white_only=white_weights)
+        r_white = experiment.apply_N_inv(residual, noise_params, samprate=1.0, power=0.5,
+                                         white_only=white_weights)
         numerator += np.sum(s_white[mask] * r_white[mask])
         denominator += np.sum(s_white[mask]**2)
 
     scan_view = SimpleNamespace(iter_focused=lambda **kwargs: iter(views))
     monkeypatch.setattr(gain, "TODView", lambda *args, **kwargs: scan_view)
-    gains = _gain_step({"abs_gain": {"downsample_time": 1.0}})
+    gains = _gain_step({"abs_gain": {"downsample_time": 1.0,
+                                     "white_noise_weights": white_weights}})
     gains.abs_gain = 1.0
     samples = SimpleNamespace(band_comm=MPI.COMM_SELF, experiment_data=experiment, chain=1)
     gains.sample_absolute(samples, None, 1, SimpleNamespace(standard_normal=lambda: 0.37))

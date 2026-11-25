@@ -120,6 +120,7 @@ def test_documented_defaults_are_set_by_the_steps():
     assert steps.gain.cfg.temporal_gain.calibrate_against == "sky"
     assert steps.gain.cfg.abs_gain.downsample_time == 1.0
     assert steps.gain.cfg.abs_gain.mask_threshold == 0.5
+    assert steps.gain.cfg.abs_gain.white_noise_weights is False
     noise = steps.noise.cfg
     assert noise.sigma0_method == "pairwise"
     assert noise.sigma0_decimation == 1

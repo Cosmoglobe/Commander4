@@ -742,6 +742,15 @@ class TestApplyNInv:
         np.testing.assert_allclose(half, band.apply_N_inv(x, params, samprate=1.0),
                                    rtol=1e-10, atol=1e-12)
 
+    def test_white_only_ignores_the_correlated_noise(self):
+        """With `white_only`, a 1/f model weights by sigma0 alone, at the downsampled rate."""
+        params = np.array([2.0, 0.2, -1.7])
+        x = np.random.default_rng(5).normal(size=997) + 2.0
+        out = self._detgroup(NoisePSDOof()).apply_N_inv(x, params, samprate=1.0, power=0.5,
+                                                        white_only=True)
+        sigma_block = 2.0*np.sqrt(1.0/10.0)   # sigma0 of a 10-sample block average
+        np.testing.assert_allclose(out, (x - x.mean())/sigma_block, rtol=1e-12)
+
     def test_projects_out_dc(self):
         """apply_N_inv must remove the DC (mean) mode, matching Commander multiply_inv_N."""
         dg = self._detgroup(NoisePSDOof())

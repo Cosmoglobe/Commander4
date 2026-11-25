@@ -209,6 +209,10 @@ tod_processing:
                               # towards 1 demands ever cleaner chunks, which for glitchy data
                               # (HFI cosmic rays) throws away nearly everything. The gain fit
                               # uses only the chunks that pass.
+    white_noise_weights: false  # Weight the gain fit by the white-noise level sigma0 alone,
+                              # ignoring the 1/f part of the noise model, as C3's HFI runs do.
+                              # Still unbiased, but noisier, and the gain is drawn too narrow
+                              # where the 1/f noise is strong. Default: the full noise PSD.
 
   rel_gain:
     enabled: true
