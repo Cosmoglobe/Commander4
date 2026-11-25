@@ -32,7 +32,7 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.tod.samples import TODSamples
 from commander4.math_utils.arithmetic import inplace_scale, dot, norm
 from commander4.math_utils.fft import forward_rfft, backward_rfft
-from commander4.math_utils.transfer_func import SinglePole
+from commander4.math_utils.transfer_func import AsymmetricTransferFunction
 
 
 class CGMapmaker:
@@ -58,6 +58,8 @@ class CGMapmaker:
             params: The full parameter file: `resources.tod.num_threads` for the FFTs, and
                 `tod_processing.cg_mapmaker`, the CG iteration limit (`max_iter`) and tolerance on
                 the squared relative preconditioned residual (`err_tol`).
+            compsep_output: The band's sky model at this rank's local pixels. Only an asymmetric T
+                uses it, to choose between its rising and falling filters.
             CG_check_interval: Check convergence every this many iterations.
 
         The rank's RHS/LHS buffers hold the pixels of the band's ``PixelDomain``
@@ -229,7 +231,11 @@ class CGMapmaker:
         if self._rhs_loca_map is None:
             #if not done already, allocate memory for local maps
             self._rhs_loca_map = np.zeros((self._ncomp, self._nloc))
-        sky_model_tod = None if self._scan_view.compsep_output is None else view.get_sky_tod()
+        # An asymmetric T applies its rising or falling filter where the sky model rises or falls.
+        # The sky model is fixed during the solve, so T is too, as the CG requires. Any other T
+        # ignores it, so the projection is skipped.
+        is_asymmetric = isinstance(self.TF, AsymmetricTransferFunction)
+        sky_model_tod = view.get_sky_tod() if is_asymmetric else None
         # Guard against pathological scans that slip past read-in: an empty scan crashes the FFT,
         # and a single non-finite good sample is spread across the whole scan by apply_T (and then
         # across every pixel that scan hits), making the CG residual NaN. Readers should discard
@@ -290,9 +296,9 @@ class CGMapmaker:
             response_I_P = view.response_I_P
             inv_var = (view.get_gain()/view.sigma0)**2  # as in accum_to_RHS and the binned weights
             good_mask = view.get_mask(proc_mask=False)
-            # We avoid useless sly model projection when there is no compsep output passed 
-            # (i.e. TF is symmetric and do not need it)
-            sky_model_tod = None if self._scan_view.compsep_output is None else view.get_sky_tod()
+            # As in accum_to_RHS: only an asymmetric T needs the sky model.
+            is_asymmetric = isinstance(self.TF, AsymmetricTransferFunction)
+            sky_model_tod = view.get_sky_tod() if is_asymmetric else None
             scan_tod_arr_aux = np.zeros(pix_local.shape[0], dtype=np.float64)  # full-length, as RHS
             #P m
             scan_tod_arr_aux = self.apply_P(local_in, scan_tod_arr_aux, pix_local, psi,

@@ -82,7 +82,8 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
     with benchmark("setup"):
         binned = BinnedMapmaker(experiment_data.pixel_domain, pols, map_names,
                                 count_hits=count_hits)
-        cg = CGMapmaker(experiment_data, tod_samples, params) if use_cg else None
+        cg = (CGMapmaker(experiment_data, tod_samples, params, compsep_output=compsep_output)
+              if use_cg else None)
 
     ### MAIN SCAN LOOP ###
     # Each scan's wall time in this loop is recorded as its measured cost, for spreading the scans
