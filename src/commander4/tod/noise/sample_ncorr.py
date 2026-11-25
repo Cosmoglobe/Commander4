@@ -178,68 +178,6 @@ def inefficient_corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.
     return x_full
 
 
-def realize_noise_in_gaps(noise_resid: NDArray, mask: NDArray[np.bool_], noise_model: NoisePSD,
-                          noise_params: NDArray, samprate: float, fsamp: float, method: str,
-                          rng: np.random.Generator, *, cg_err_tol: float = 1e-6,
-                          cg_max_iter: int = 100) -> NDArray:
-    """ Replace the masked samples of a noise residual with a constrained 1/f + white realization.
-
-        Used by the gain samplers, whose calibration residuals are block-averaged to *samprate* (Hz)
-        from the native *fsamp*. Masked samples carry no usable data (e.g. bright Galactic-plane
-        residuals) and must be replaced before the residual is Fourier-filtered by ``apply_N_inv``.
-        The returned array equals *noise_resid* at valid samples and a fresh, surrounding-data-aware
-        noise draw (correlated 1/f from the constrained realization, plus white) at the gaps.
-
-        The 1/f model is evaluated at *samprate* with ``sigma0`` rescaled by
-        ``sqrt(samprate/fsamp)`` (the same downsampling scaling ``apply_N_inv`` applies to the whole
-        PSD), so the draw is statistically consistent with the noise weighting used in the gain
-        solve.
-
-    Args:
-        noise_resid: Block-averaged residual (data minus full sky model at full gain), 1D. Valid
-            samples hold the true noise; masked samples are overwritten.
-        mask: Boolean validity mask (True = valid).
-        noise_model: NoisePSD model providing ``compute_inv_corr_spectrum``.
-        noise_params: Native-rate noise parameters [sigma0, fknee, alpha, ...].
-        samprate: Sampling rate of *noise_resid* after block-averaging (Hz).
-        fsamp: Native sampling rate the noise parameters refer to (Hz).
-        method: ``'fallback'`` (stationary full-mask Wiener draw on the inpainted residual) or
-            ``'full_cg'`` (masked constrained CG, with the stationary draw as a
-            non-convergence/high-variance fallback). ``'wn'`` is handled by the caller and never
-            reaches this function.
-        rng: Random generator for the gap realization.
-        cg_err_tol, cg_max_iter: CG controls for ``method='full_cg'``.
-    Returns:
-        A float64 copy of *noise_resid* with the masked samples replaced by the constrained draw.
-    """
-    out = np.array(noise_resid, dtype=np.float64, copy=True)
-    if mask.all():
-        return out  # no gaps to fill
-    params = np.array(noise_params, dtype=np.float64, copy=True)
-    params[0] *= np.sqrt(samprate / fsamp)  # white floor at the downsampled rate (cf. apply_N_inv).
-    sigma0 = float(params[0])
-    freq = rfftfreq(2 * out.size, d=1.0/samprate)  # mirrored-FFT grid at the downsampled rate
-    C_corr_inv = noise_model.compute_inv_corr_spectrum(freq, params)
-
-    fill_all_masked(out, mask, sigma0, rng)  # linear+white seed for the CG / stationary solve
-    full_mask = np.ones_like(mask)
-    if method == "fallback":
-        n_corr, *_ = corr_noise_realization_with_gaps(out, full_mask, sigma0, C_corr_inv, rng)
-    elif method == "full_cg":
-        n_corr, _, _, converged = corr_noise_realization_with_gaps(
-            out, mask, sigma0, C_corr_inv, rng, err_tol=cg_err_tol, max_iter=cg_max_iter)
-        resid = (out - n_corr) * mask
-        if not converged or np.dot(resid, resid) > np.dot(out*mask, out*mask):
-            n_corr, *_ = corr_noise_realization_with_gaps(out, full_mask, sigma0, C_corr_inv, rng)
-    else:
-        raise ValueError(f"method must be 'fallback' or 'full_cg', got {method!r}.")
-
-    # Masked residual = constrained correlated draw + a fresh white realization.
-    gap = ~mask
-    out[gap] = n_corr[gap] + sigma0 * rng.standard_normal(int(np.count_nonzero(gap)))
-    return out
-
-
 def _estimate_sigma0(residual: NDArray, n_corr: NDArray, mask: NDArray[np.bool_],
                      dec: int) -> float:
     """Robust white-noise level from the fully-cleaned residual (sky- and n_corr-subtracted)."""

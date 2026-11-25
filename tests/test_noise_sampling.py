@@ -12,8 +12,7 @@ from commander4.tod.noise.sigma0 import (calc_sigma0_simple, calc_sigma0_robust,
 from commander4.tod.noise.psd import NoisePSD2Oof, NoisePSDOof
 from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.sample_ncorr import (sample_correlated_noise,
-                                                    corr_noise_realization_with_gaps,
-                                                    realize_noise_in_gaps)
+                                                    corr_noise_realization_with_gaps)
 from commander4.tod.noise.sampling import Noise
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from tod_step_fakes import make_step
@@ -150,91 +149,23 @@ class TestBinnedPSDSigma0:
 
 
 # ===================================================================
-# Gain-step gap-fill realization (realize_noise_in_gaps)
+# Gap filling (fill_all_masked)
 # ===================================================================
 
-class TestRealizeNoiseInGaps:
-    @staticmethod
-    def _setup(ntod=4096, fsamp=1.0, sigma0=1.0, fknee=0.2, alpha=-1.8, seed=4):
-        rng = np.random.default_rng(seed)
-        noise = _synth_corr_noise(seed, ntod, fsamp, sigma0, fknee, alpha) \
-            + rng.normal(0.0, sigma0, ntod)
-        mask = np.ones(ntod, dtype=bool)
-        mask[1000:1100] = False  # contiguous gap
-        mask[2000] = False       # single-sample gap
-        return noise, mask, np.array([sigma0, fknee, alpha]), fsamp
+def test_the_same_generator_seed_gives_the_same_gap_fill():
+    """The white gap noise drawn inside Numba must come from the caller's generator.
 
-    def test_fallback_and_full_cg_fill_gaps_keep_valid(self):
-        """Both methods replace masked samples with a finite draw and leave valid samples intact."""
-        m = NoisePSDOof()
-        noise, mask, params, fsamp = self._setup()
-        for method in ("fallback", "full_cg"):
-            rng = np.random.default_rng(0)
-            out = realize_noise_in_gaps(noise.copy(), mask, m, params, fsamp, fsamp, method, rng)
-            assert np.all(np.isfinite(out))
-            assert np.array_equal(out[mask], noise[mask])      # valid samples untouched
-            assert not np.allclose(out[~mask], noise[~mask])   # gaps replaced
-            assert np.var(out[~mask]) > 0
-
-    def test_same_generator_seed_gives_the_same_gap_fill(self):
-        """The white gap noise drawn inside Numba must come from the caller's generator.
-
-        Numba keeps its own `np.random` state, which NumPy seeding does not reach. The 'fallback'
-        method returns the inpainted values almost directly, so drawing from that state made it
-        differ between calls with the same seed.
-        """
-        m = NoisePSDOof()
-        noise, mask, params, fsamp = self._setup()
-        first = realize_noise_in_gaps(noise.copy(), mask, m, params, fsamp, fsamp, "fallback",
-                                      np.random.default_rng(3))
-        second = realize_noise_in_gaps(noise.copy(), mask, m, params, fsamp, fsamp, "fallback",
-                                       np.random.default_rng(3))
-        np.testing.assert_array_equal(first, second)
-
-        tod_a, tod_b = noise.copy(), noise.copy()
-        fill_all_masked(tod_a, mask, params[0], np.random.default_rng(3))
-        fill_all_masked(tod_b, mask, params[0], np.random.default_rng(3))
-        np.testing.assert_array_equal(tod_a, tod_b)
-
-    def test_no_gaps_is_identity(self):
-        """With an all-valid mask there is nothing to fill: the input is returned unchanged."""
-        m = NoisePSDOof()
-        noise, _, params, fsamp = self._setup()
-        full = np.ones(noise.size, dtype=bool)
-        out = realize_noise_in_gaps(noise.copy(), full, m, params, fsamp, fsamp, "fallback",
-                                    np.random.default_rng(0))
-        assert np.array_equal(out, noise)
-
-    def test_white_level_scales_with_samprate(self):
-        """The gap noise level follows sigma0*sqrt(samprate/fsamp) (the apply_N_inv convention).
-
-        Treating the same residual as 10x downsampled rescales sigma0 by sqrt(1/10), so the
-        white-dominated gap fluctuation must shrink substantially relative to the native-rate draw.
-        """
-        class _White(NoisePSDOof):
-            def eval_corr(self, freqs, noise_params):
-                return np.zeros(len(freqs), dtype=np.float64)  # pure white: no 1/f gap structure
-        m = _White()
-        n, sigma0 = 8192, 2.0
-        params = np.array([sigma0, 0.2, -1.8])
-        mask = np.ones(n, dtype=bool)
-        mask[1000:5000] = False
-        noise = np.random.default_rng(0).normal(0.0, sigma0, n)
-        full_rate = realize_noise_in_gaps(noise.copy(), mask, m, params, 10.0, 10.0, "fallback",
-                                          np.random.default_rng(0))
-        down = realize_noise_in_gaps(noise.copy(), mask, m, params, 1.0, 10.0, "fallback",
-                                     np.random.default_rng(0))
-        # Downsampling 10x suppresses the white gap fluctuation by ~1/10 in variance.
-        assert np.var(down[~mask]) < 0.5 * np.var(full_rate[~mask])
-
-    def test_invalid_method_raises(self):
-        m = NoisePSDOof()
-        noise, mask, params, fsamp = self._setup()
-        # 'wn' is handled by the caller (TODView) and is not valid for this realizer.
-        for bad in ("wn", "bogus"):
-            with pytest.raises(ValueError):
-                realize_noise_in_gaps(noise.copy(), mask, m, params, fsamp, fsamp, bad,
-                                      np.random.default_rng(0))
+    Numba keeps its own `np.random` state, which NumPy seeding does not reach.
+    """
+    tod = np.random.default_rng(4).normal(size=4096)
+    mask = np.ones(tod.size, dtype=bool)
+    mask[1000:1100] = False  # contiguous gap
+    mask[2000] = False       # single-sample gap
+    tod_a, tod_b = tod.copy(), tod.copy()
+    fill_all_masked(tod_a, mask, 1.0, np.random.default_rng(3))
+    fill_all_masked(tod_b, mask, 1.0, np.random.default_rng(3))
+    np.testing.assert_array_equal(tod_a, tod_b)
+    np.testing.assert_array_equal(tod_a[mask], tod[mask])
 
 
 # ===================================================================
@@ -476,19 +407,6 @@ class TestNoisePSD2Oof:
         assert not np.array_equal(res.noise_params[1:], _2OOF_TRUTH[1:])   # all four resampled
         for idx in (1, 2, 3, 4):
             assert m.P_uni[idx, 0] <= res.noise_params[idx] <= m.P_uni[idx, 1]
-
-    def test_realize_noise_in_gaps_accepts_the_five_parameter_model(self):
-        m, noise = self._model(), self._residual(2**12, 3)
-        mask = np.ones(noise.size, dtype=bool)
-        mask[1000:1100] = False
-        mask[2000] = False
-        for method in ("fallback", "full_cg"):
-            out = realize_noise_in_gaps(noise.copy(), mask, m, _2OOF_TRUTH, _2OOF_FSAMP,
-                                        _2OOF_FSAMP, method, np.random.default_rng(0))
-            assert np.all(np.isfinite(out))
-            assert np.array_equal(out[mask], noise[mask])      # valid samples untouched
-            assert not np.allclose(out[~mask], noise[~mask])   # gaps replaced
-            assert np.var(out[~mask]) > 0
 
     def test_fit_range_from_the_parameter_file_sets_every_sampled_window(self):
         """The shared fit limits must reach all four sampled parameters, not just fknee/alpha."""
@@ -773,7 +691,7 @@ class TestApplyNInv:
     @pytest.mark.parametrize("white_noise", [False, True])
     @pytest.mark.parametrize("samprate", [None, 1.0])
     def test_symmetry_contract(self, dtype: type, white_noise: bool, samprate: float | None):
-        """All gain samplers require x^T N^-1 y = (N^-1 x)^T y, including DC projection."""
+        """N^-1 is symmetric: x^T N^-1 y = (N^-1 x)^T y, including the DC projection."""
         model = NoisePSDOof()
         model.is_white = white_noise
         band = self._detgroup(model)
@@ -796,7 +714,7 @@ class TestApplyNInv:
     @pytest.mark.parametrize("samprate", [None, 1.0])
     def test_symmetry_contract_with_a_five_parameter_model(self, dtype: type,
                                                           samprate: float | None):
-        """The gain samplers' x^T N^-1 y = (N^-1 x)^T y contract must not depend on the PSD model."""
+        """N^-1 is symmetric with a five-parameter PSD model too."""
         band = self._detgroup(NoisePSD2Oof(), fsamp=_2OOF_FSAMP)
         rng = np.random.default_rng(17)
         for size in (997, 1024):
@@ -809,6 +727,20 @@ class TestApplyNInv:
             scale = np.linalg.norm(x.astype(np.float64)) * np.linalg.norm(ny.astype(np.float64))
             tolerance = 5e-6 if dtype == np.float32 else 1e-12
             np.testing.assert_allclose(lhs, rhs, rtol=0.0, atol=tolerance*scale)
+
+    @pytest.mark.parametrize("white_noise", [False, True])
+    def test_two_whitening_passes_give_the_full_inverse(self, white_noise: bool):
+        """N^-1/2 applied twice is N^-1, so the gain samplers' (N^-1/2 s)^T (N^-1/2 d) is s^T N^-1 d
+        when no block is masked."""
+        model = NoisePSDOof()
+        model.is_white = white_noise
+        band = self._detgroup(model)
+        params = np.array([2.0, 0.2, -1.7])
+        x = np.random.default_rng(5).normal(size=997) + 2.0
+        half = band.apply_N_inv(band.apply_N_inv(x, params, samprate=1.0, power=0.5), params,
+                                samprate=1.0, power=0.5)
+        np.testing.assert_allclose(half, band.apply_N_inv(x, params, samprate=1.0),
+                                   rtol=1e-10, atol=1e-12)
 
     def test_projects_out_dc(self):
         """apply_N_inv must remove the DC (mean) mode, matching Commander multiply_inv_N."""

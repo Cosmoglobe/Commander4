@@ -194,14 +194,13 @@ def test_an_optional_scope_may_be_absent_without_complaint(caplog):
 
 
 def test_legal_values_rejects_a_mistyped_value():
-    params = Bunch(tod_processing=Bunch(gap_fill_method="wn"))
-    assert resolve_param(params, "gap_fill_method", ("tod_processing",),
-                         legal_values=("wn", "fallback")) == "wn"
+    params = Bunch(tod_processing=Bunch(mapmaker="cg"))
+    assert resolve_param(params, "mapmaker", ("tod_processing",),
+                         legal_values=("cg", "bin")) == "cg"
     with pytest.raises(ValueError) as excinfo:
-        resolve_param(params, "gap_fill_method", ("tod_processing",),
-                      legal_values=("fallback", "full_cg"))
+        resolve_param(params, "mapmaker", ("tod_processing",), legal_values=("CG", "bin"))
     message = str(excinfo.value)
-    assert "'wn'" in message and "fallback" in message and "tod_processing" in message
+    assert "'cg'" in message and "CG" in message and "tod_processing" in message
 
 
 def test_legal_values_also_checks_the_default():

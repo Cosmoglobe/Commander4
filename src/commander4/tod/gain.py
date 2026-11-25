@@ -31,9 +31,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-GAIN_GAP_FILL_METHODS = ("wn", "fallback", "full_cg")
-
-# Above this frequency the orbital dipole is faint compared with the foregrounds.
+# Gives a warning if asked to calibrate again CMB dipole above this frequency.
 ORBITAL_DIPOLE_MAX_FREQ_GHZ = 400.0
 
 
@@ -93,8 +91,8 @@ class Gain(TODStep):
     Attributes:
         cfg: The settings of the three terms, as ``cfg.abs_gain``, ``cfg.rel_gain`` and
             ``cfg.temporal_gain``: whether and from which iteration the term is sampled, the
-            calibrator it is sampled against, and the TOD it is sampled from (gap filling, the
-            averaging time in seconds, and the fraction of an averaged block that must be good).
+            calibrator it is sampled against, and the TOD it is sampled from (the averaging time
+            in seconds, and the fraction of an averaged block that must be good).
             The calibrator (`calibrate_against`, see `TODView.get_calib_tod`) is one of:
               * ``orbital_dipole``: the CMB dipole from the observer's motion, alone. It is known
                 from the spacecraft velocity and the CMB monopole temperature, without the sky
@@ -130,11 +128,8 @@ class Gain(TODStep):
                                          ("temporal_gain", "sky")):
             cfg = read_settings(params, term, (f"experiments.{exp}.bands.{band}", "tod_processing"),
                                 {"enabled": False, "from_iter": 1,
-                                 "calibrate_against": default_calibrator, "gap_fill_method": "wn",
+                                 "calibrate_against": default_calibrator,
                                  "downsample_time": 1.0, "mask_threshold": 0.5})
-            # A misspelled method would otherwise go unnoticed until a block has masked samples.
-            if cfg.gap_fill_method not in GAIN_GAP_FILL_METHODS:
-                raise ValueError(f"{term}.gap_fill_method must be one of {GAIN_GAP_FILL_METHODS}.")
             if (cfg.enabled and cfg.calibrate_against == "orbital_dipole"
                     and experiment_data.nu > ORBITAL_DIPOLE_MAX_FREQ_GHZ
                     and band_comm.Get_rank() == 0 and chain == 1):
@@ -149,7 +144,7 @@ class Gain(TODStep):
         self.band_unit_factor = experiment_data.band_unit_factor
         nscans, ndet = experiment_data.nscans, experiment_data.ndet
         self.abs_gain = 0.0
-        self.rel_gain = np.zeros((ndet))
+        self.rel_gain = np.zeros(ndet)
         self.temporal_gain = np.zeros((nscans, ndet))
         self.gain_prior = np.full((ndet, 3), np.nan)
 
@@ -245,21 +240,18 @@ class Gain(TODStep):
         with benchmark("eqn-setup"):
             # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
             for view in scan_view.iter_focused(accepted_only=True):
-                calib = view.get_calib_tod("abs", gain_cfg.calibrate_against, rng,
-                                           gap_fill_method=gain_cfg.gap_fill_method)
-                s_cal = calib.s_cal
-                residual_tod = calib.tod
-
-                # Calibration TODs are block-averaged, so their true rate is
-                # fsamp/downsample_factor; apply_N_inv needs it to place the 1/f noise weight at
-                # the correct frequencies.
+                calib = view.get_calib_tod("abs", gain_cfg.calibrate_against, rng)
+                # Whiten the calibrator and the residual with N^-1/2, and fit on the good blocks
+                # only: s^T N^-1 d becomes sum(mask * s_white * r_white). [C3's accumulate_abscal]
+                # The TODs are block-averaged, so their rate is fsamp/downsample_factor, which
+                # apply_N_inv needs to place the 1/f noise weight at the right frequencies.
                 gain_samprate = view.fsamp / view.downsample_factor
-                N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params,
-                                                      samprate=gain_samprate)
-
-                # N^-1 is symmetric, so s^T N^-1 d = (N^-1 s)^T d, giving:
-                sum_s_T_N_inv_d += np.dot(N_inv_s, residual_tod)
-                sum_s_T_N_inv_s += np.dot(s_cal, N_inv_s)
+                s_white = experiment_data.apply_N_inv(calib.s_cal, view.noise_params,
+                                                      samprate=gain_samprate, power=0.5)
+                r_white = experiment_data.apply_N_inv(calib.tod, view.noise_params,
+                                                      samprate=gain_samprate, power=0.5)
+                sum_s_T_N_inv_d += np.sum(calib.mask * s_white * r_white)
+                sum_s_T_N_inv_s += np.sum(calib.mask * s_white**2)
 
         # g0 is common to all detector-scans of the band, so the sums run over all its ranks.
         with benchmark("MPI-comm"):
@@ -324,23 +316,17 @@ class Gain(TODStep):
         with benchmark("eqn-setup"):
             # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
             for view in scan_view.iter_focused(accepted_only=True):
-                calib = view.get_calib_tod("rel", gain_cfg.calibrate_against, rng,
-                                           gap_fill_method=gain_cfg.gap_fill_method)
-                s_cal = calib.s_cal
-                residual_tod = calib.tod
-                # Calibration TODs are block-averaged, so their true rate is
-                # fsamp/downsample_factor; apply_N_inv needs it to place the 1/f noise weight at
-                # the correct frequencies.
+                calib = view.get_calib_tod("rel", gain_cfg.calibrate_against, rng)
+                # Whitened calibrator and residual, summed over the good blocks, as in
+                # `sample_absolute`.
                 gain_samprate = view.fsamp / view.downsample_factor
-                N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params,
-                                                      samprate=gain_samprate)
-
-                s_T_N_inv_s_scan = np.dot(s_cal, N_inv_s)
-                r_T_N_inv_s_scan = np.dot(residual_tod, N_inv_s)
-
+                s_white = experiment_data.apply_N_inv(calib.s_cal, view.noise_params,
+                                                      samprate=gain_samprate, power=0.5)
+                r_white = experiment_data.apply_N_inv(calib.tod, view.noise_params,
+                                                      samprate=gain_samprate, power=0.5)
                 # Add the contribution from this scan to the local sum (full-band detector column).
-                local_s_T_N_inv_s[view.idet] += s_T_N_inv_s_scan
-                local_r_T_N_inv_s[view.idet] += r_T_N_inv_s_scan
+                local_s_T_N_inv_s[view.idet] += np.sum(calib.mask * s_white**2)
+                local_r_T_N_inv_s[view.idet] += np.sum(calib.mask * s_white * r_white)
 
         ### 2. Intra-Detector Reduction ###
         # Sum the per-detector values over all ranks of the band, whose scans each hold a part of
@@ -428,32 +414,19 @@ class Gain(TODStep):
                             proc_mask_type="gain",
                             mask_threshold=gain_cfg.mask_threshold)
 
-        # I'm still not sure what way of dealing with the masked samples are best:
-        # 1. Replace masked values with 0s before FFT.
-        # 2. Replace masked values with n_corr realizations before FFT.
-        # 3. Remove masked values by reducing TOD size before FFTs.
-        # (simply passing the full data through the FFTs seems like a bad idea because of
-        # ringing from the large residual in the galactic plane).
         # Rejected detector-scans (accepted_only) contribute zero weight (A_qq = b_q = 0); the
         # Wiener prior then fills their temporal gain from neighbors.
         for view in scan_view.iter_focused(accepted_only=True):
-            calib = view.get_calib_tod("temp", gain_cfg.calibrate_against, rng,
-                                       gap_fill_method=gain_cfg.gap_fill_method)
-            s_cal = calib.s_cal
-            residual_tod = calib.tod
-
-            # Calibration TODs are block-averaged, so their true rate is fsamp/downsample_factor;
-            # apply_N_inv needs it to place the 1/f noise weight at the correct frequencies.
+            calib = view.get_calib_tod("temp", gain_cfg.calibrate_against, rng)
+            # Whitened calibrator and residual, summed over the good blocks, as in
+            # `sample_absolute`.
             gain_samprate = view.fsamp / view.downsample_factor
-            N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params,
-                                                  samprate=gain_samprate)
-
-            # N^-1 is symmetric, so s^T N^-1 d = (N^-1 s)^T d, giving:
-            b_q = np.dot(N_inv_s, residual_tod)
-            A_qq = np.dot(s_cal, N_inv_s)
-
-            A_qq_local[view.idet, view.iscan] = A_qq
-            b_q_local[view.idet, view.iscan] = b_q
+            s_white = experiment_data.apply_N_inv(calib.s_cal, view.noise_params,
+                                                  samprate=gain_samprate, power=0.5)
+            r_white = experiment_data.apply_N_inv(calib.tod, view.noise_params,
+                                                  samprate=gain_samprate, power=0.5)
+            A_qq_local[view.idet, view.iscan] = np.sum(calib.mask * s_white**2)
+            b_q_local[view.idet, view.iscan] = np.sum(calib.mask * s_white * r_white)
 
         # Gather scan counts on all ranks (needed for gather/scatter with varying roots)
         scan_counts = np.array(band_comm.allgather(nscans_local), dtype=int)

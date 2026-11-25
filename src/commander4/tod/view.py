@@ -17,7 +17,7 @@ from pixell.bunch import Bunch
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.pointing import remap_pix_nside
-from commander4.tod.noise.sample_ncorr import realize_noise_in_gaps
+from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.sky_projection import project_sky_to_tod, get_s_orb_tod
 
 # Type hints only: `TODSamples` imports the sampling steps, and they import this module.
@@ -117,7 +117,6 @@ class TODView:
         self._sky = None
         self._orbital_dipole = None
         self._far_sidelobes = None
-        self._gap_noise: dict[str, NDArray] = {}
 
     def focus(self, iscan: int, det: DetectorTOD) -> "TODView":
         """Focus the view on one present detector and discard any previous materialization.
@@ -535,66 +534,8 @@ class TODView:
     # ============================================================================================ #
 
     # ------------------------------------------------------------------ gain calibration
-    def _gap_noise_draw(self, method: str, rng: np.random.Generator) -> NDArray[np.floating]:
-        """Constrained noise realization at the masked samples of the calibration TOD.
-
-        The noise residual ``get_tod()``, ``d - g*(s_sky + s_orb + s_sl)`` at the full gain, is
-        identical for every gain term, so the 1/f + white gap draw is computed once and shared
-        across the abs/rel/temporal solves (cached per method, at the view's active resolution).
-        ``method`` is ``'fallback'`` or ``'full_cg'``.
-        """
-        cached = self._gap_noise.get(method)
-        if cached is not None:
-            return cached
-        mask = self.get_mask(proc_mask_type=self._proc_mask_type)
-        # True noise at valid samples; Galactic-plane garbage at masked ones, which the
-        # realization replaces.
-        noise_resid = self.get_tod()
-        samprate = self.fsamp / self._downsample_factor  # block-averaging downsamples fsamp
-        draw = realize_noise_in_gaps(noise_resid, mask, self.experiment_data.noise_model,
-                                     self.noise_params, samprate, self.fsamp, method, rng)
-        self._gap_noise[method] = draw
-        return draw
-
-
-    def _fill_masked_calibration_samples(
-        self,
-        tod: NDArray[np.floating],
-        mask: NDArray[np.bool_],
-        signal: NDArray[np.floating],
-        gain_terms: tuple[str, ...],
-        rng: np.random.Generator,
-        method: str = "wn",
-    ) -> NDArray[np.floating]:
-        """Fill masked calibration samples with the target signal plus a noise realization.
-
-        The masked regions retain only the target gain term times the calibrator signal, plus a
-        noise draw: white (``method='wn'``, sigma0/sqrt(factor)) or a constrained correlated 1/f +
-        white draw (``'fallback'``/``'full_cg'``) shared across gain terms via ``_gap_noise_draw``,
-        so the masked residual carries the same 1/f structure as the surrounding valid data.
-        """
-        filled = np.array(tod, copy=True)
-        gap = ~mask
-        if not gap.any():
-            return filled
-        target = self.get_gain(gain_terms) * signal[gap]
-        if method == "wn":
-            sigma0_effective = self.sigma0 * np.sqrt(1.0 / self._downsample_factor)
-            filled[gap] = target + rng.normal(0.0, sigma0_effective, target.shape)
-        else:
-            filled[gap] = target + self._gap_noise_draw(method, rng)[gap]
-        return filled
-
-
-    def get_calib_tod(
-        self,
-        target_term: str,
-        calibrate_against: str,
-        rng: np.random.Generator,
-        *,
-        fill_masked: bool = True,
-        gap_fill_method: str = "wn",
-    ) -> Bunch:
+    def get_calib_tod(self, target_term: str, calibrate_against: str,
+                      rng: np.random.Generator) -> Bunch:
         """Return the residual, calibrator signal, and mask used to sample one gain term.
 
         Everything is returned at the view's active downsample resolution. The detector model is
@@ -602,19 +543,16 @@ class TODView:
         far-sidelobe pickup. To sample ``target_term`` against a calibrator signal ``s_cal`` (the
         part of ``s_sky + s_orb + s_sl`` selected by ``calibrate_against``), the residual must be
         ``g_target * s_cal + n``. It is therefore `get_tod`, which has all three signals removed at
-        the full gain, with ``g_target * s_cal`` added back.
+        the full gain, with ``g_target * s_cal`` added back. In the masked blocks, both the residual
+        and the calibrator hold a straight line between the gap edges instead.
 
         Args:
             target_term: Gain term being sampled, one of ``ALL_GAIN_TERMS`` ("abs", "rel", "temp").
             calibrate_against: Calibrator, one of "orbital_dipole", "sky", or "sky_no_dipole".
-            rng: Random generator for the noise drawn into the masked samples.
-            fill_masked: If True, fill masked samples with ``g_target * s_cal`` plus a noise draw.
-            gap_fill_method: How masked samples are filled when ``fill_masked``: ``'wn'`` (white
-                noise), ``'fallback'`` (stationary 1/f Wiener draw), or ``'full_cg'`` (masked
-                constrained-CG 1/f draw). See ``_fill_masked_calibration_samples``.
+            rng: Random generator for the white noise in the residual's masked blocks.
 
         Returns:
-            Bunch with ``tod`` (residual), ``s_cal``, and ``mask``.
+            Bunch with ``tod`` (residual), ``s_cal``, and ``mask`` (True at the good blocks).
         """
         if target_term not in self.ALL_GAIN_TERMS:
             raise ValueError(f"Unknown gain term '{target_term}'; expected one of "
@@ -632,7 +570,13 @@ class TODView:
 
         mask = self.get_mask(proc_mask_type=self._proc_mask_type)
         tod = self.get_tod() + self.get_gain((target_term,)) * s_cal
-        if fill_masked:
-            tod = self._fill_masked_calibration_samples(tod, mask, s_cal, (target_term,), rng,
-                                                        method=gap_fill_method)
+        # The gain samplers whiten both with N^-1/2, a Fourier filter that would spread whatever
+        # the masked blocks hold (such as a bright Galactic residual) into the good blocks nearby.
+        # Both are therefore filled with the same straight line between the means of the good
+        # blocks at each gap edge. Since the fill is the same linear operation on both, the filled
+        # residual is still g_target * (filled s_cal) + noise, which keeps the gain unbiased. As in
+        # C3, the residual's fill also gets white noise. [C3: sample_calibration]
+        s_cal = np.array(s_cal, copy=True)  # The fill works in place, and the dipole TOD is cached.
+        fill_all_masked(s_cal, mask, 0.0, rng)
+        fill_all_masked(tod, mask, self.sigma0/np.sqrt(self._downsample_factor), rng)
         return Bunch(tod=tod, s_cal=s_cal, mask=mask)

@@ -59,7 +59,6 @@ tod_processing:
     from_iter: 2
     # calibrate_against: orbital_dipole # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     calibrate_against: sky # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
-    gap_fill_method: fallback         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     # Keep at 0.1 or below for SO.
     downsample_time: 0.1   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
@@ -67,7 +66,6 @@ tod_processing:
     enabled: true
     from_iter: 2
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
-    gap_fill_method: fallback         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     # Keep at 0.1 or below for SO.
     downsample_time: 0.1   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
@@ -75,7 +73,6 @@ tod_processing:
     enabled: false
     from_iter: 2
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
-    gap_fill_method: fallback         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     # Keep at 0.1 or below for SO.
     downsample_time: 0.1   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 

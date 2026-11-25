@@ -59,13 +59,11 @@ tod_processing:
     enabled: true
     from_iter: 1
     calibrate_against: sky
-    gap_fill_method: full_cg
     downsample_time: 0.0
   rel_gain:
     enabled: true
     from_iter: 2
     calibrate_against: sky_no_dipole
-    gap_fill_method: wn
     downsample_time: 1.0
     mask_threshold: 0.8
   temporal_gain:

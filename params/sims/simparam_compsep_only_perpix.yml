@@ -59,19 +59,16 @@ tod_processing:
   abs_gain:
     enabled: false
     from_iter: 2
-    gap_fill_method: wn
     downsample_time: 1.0
 
   rel_gain:
     enabled: false
     from_iter: 3
-    gap_fill_method: wn
     downsample_time: 1.0
 
   temporal_gain:
     enabled: false
     from_iter: 4
-    gap_fill_method: wn
     downsample_time: 1.0
 
   corr_noise:

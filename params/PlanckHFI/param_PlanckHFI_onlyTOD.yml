@@ -78,21 +78,18 @@ tod_processing:
     enabled: true
     from_iter: 1
     calibrate_against: orbital_dipole # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
-    gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 0.5        # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   rel_gain:
     enabled: true
     from_iter: 1
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
-    gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 0.5        # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   temporal_gain:
     enabled: false
     from_iter: 1
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
-    gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 0.5        # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   corr_noise:

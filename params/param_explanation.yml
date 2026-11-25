@@ -199,10 +199,6 @@ tod_processing:
                               #   sky             the current sky model, dipole included.
                               #   sky_no_dipole   the sky model with the dipole removed.
                               # Overridable per band; see the band block below.
-    gap_fill_method: wn       # How flagged samples are filled before the calibration fit:
-                              #   wn        a white-noise draw (cheap, the default)
-                              #   fallback  a stationary 1/f Wiener draw
-                              #   full_cg   a masked CG solve (most correct, most costly)
     downsample_time: 1.0      # [s] Averaging chunk for the calibration TODs; 0 disables
                               # downsampling. Larger chunks are cheaper but blur the
                               # calibrator, so keep it well inside the dipole timescale.
@@ -211,21 +207,20 @@ tod_processing:
                               # chunk average itself only ever uses those samples. C3's
                               # `downsample_tod` threshold, and the same default. Raising it
                               # towards 1 demands ever cleaner chunks, which for glitchy data
-                              # (HFI cosmic rays) throws away nearly everything.
+                              # (HFI cosmic rays) throws away nearly everything. The gain fit
+                              # uses only the chunks that pass.
 
   rel_gain:
     enabled: true
     from_iter: 2
     calibrate_against: sky    # Relative gain needs a sky, not the dipole: the dipole is
                               # common to all detectors and cannot separate them.
-    gap_fill_method: wn
     downsample_time: 1.0
 
   temporal_gain:
     enabled: true
     from_iter: 2
     calibrate_against: sky
-    gap_fill_method: wn
     downsample_time: 1.0
 
   # --- Correlated noise, sigma0, and the noise PSD -------------------------------------

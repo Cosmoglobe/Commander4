@@ -60,20 +60,17 @@ tod_processing:
     enabled: true
     from_iter: 2
     calibrate_against: orbital_dipole
-    gap_fill_method: wn
     downsample_time: 1.0  # [s] Averaging chunk for the gain-calibration TODs (0 = off).
 
   rel_gain:
     enabled: true
     from_iter: 3
     calibrate_against: sky
-    gap_fill_method: wn
     downsample_time: 1.0  # [s] Averaging chunk for the gain-calibration TODs (0 = off).
 
   temporal_gain:
     enabled: false                  # the missing simgen feature.
     from_iter: 4
-    gap_fill_method: wn
     downsample_time: 1.0  # [s] Averaging chunk for the gain-calibration TODs (0 = off).
 
   corr_noise:

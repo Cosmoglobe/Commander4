@@ -27,9 +27,9 @@ def _params(**steps) -> Bunch:
     tod_values = {
         "mapmaker": "bin",
         "cg_mapmaker": Bunch(max_iter=10, err_tol=1.0e-10),
-        "abs_gain": Bunch(gap_fill_method="wn", downsample_time=1.0),
-        "rel_gain": Bunch(gap_fill_method="wn", downsample_time=1.0),
-        "temporal_gain": Bunch(gap_fill_method="wn", downsample_time=1.0),
+        "abs_gain": Bunch(downsample_time=1.0),
+        "rel_gain": Bunch(downsample_time=1.0),
+        "temporal_gain": Bunch(downsample_time=1.0),
     }
     for name, values in steps.items():
         if name in ("abs_gain", "rel_gain", "temporal_gain") and isinstance(values, dict):
@@ -119,7 +119,7 @@ def test_documented_defaults_are_set_by_the_steps():
     assert steps.gain.cfg.rel_gain.calibrate_against == "sky"
     assert steps.gain.cfg.temporal_gain.calibrate_against == "sky"
     assert steps.gain.cfg.abs_gain.downsample_time == 1.0
-    assert steps.gain.cfg.abs_gain.gap_fill_method == "wn"
+    assert steps.gain.cfg.abs_gain.mask_threshold == 0.5
     noise = steps.noise.cfg
     assert noise.sigma0_method == "pairwise"
     assert noise.sigma0_decimation == 1
@@ -173,7 +173,6 @@ def test_each_step_rejects_a_non_boolean_enabled(block: str) -> None:
 
 
 @pytest.mark.parametrize("block, settings, error", [
-    ("abs_gain", {"gap_fill_method": "bogus"}, "gap_fill_method"),
     ("corr_noise", {"sigma0_method": "bogus"}, "sigma0_method"),
     ("corr_noise", {"sample_psd_params": True}, "sample_psd_params"),
     ("jump_detection", {"enabled": True}, "jump_bitmask"),
@@ -204,12 +203,12 @@ def test_enabled_jump_detection_takes_the_experiments_bitmask() -> None:
 
 
 def test_each_gain_term_owns_its_settings_and_a_band_overrides_them_one_by_one():
-    params = _params(abs_gain={"gap_fill_method": "fallback", "downsample_time": 0.25})
+    params = _params(abs_gain={"mask_threshold": 0.8, "downsample_time": 0.25})
     params.experiments.EXP.bands.BAND.abs_gain = Bunch(downsample_time=0.5)
     gain = _steps(params).gain.cfg
-    assert gain.abs_gain.gap_fill_method == "fallback"
+    assert gain.abs_gain.mask_threshold == 0.8
     assert gain.abs_gain.downsample_time == 0.5
-    assert gain.rel_gain.gap_fill_method == "wn"
+    assert gain.rel_gain.mask_threshold == 0.5
     assert gain.rel_gain.downsample_time == 1.0
 
 

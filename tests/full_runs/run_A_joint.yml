@@ -61,19 +61,16 @@ tod_processing:
     enabled: true
     from_iter: 1
     calibrate_against: orbital_dipole
-    gap_fill_method: wn
     downsample_time: 1.0
   rel_gain:
     enabled: true
     from_iter: 1
     calibrate_against: sky
-    gap_fill_method: fallback
     downsample_time: 1.0
   temporal_gain:
     enabled: true
     from_iter: 1
     calibrate_against: sky
-    gap_fill_method: full_cg
     downsample_time: 2.0
   corr_noise:
     enabled: true

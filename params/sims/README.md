@@ -114,7 +114,7 @@ recover and are switched off in every file here except where noted:
   `tod_processing.temporal_gain` has no signal. Needs a per-(scan, detector) gain model in simgen;
   it is switched off everywhere here.
 - **Flags, gaps and jumps.** `simgen.writers.write_scan_file` writes an all-zero flag stream, so
-  `sample_jump_detection`, `gap_fill_method`, `data_selection.min_good_fraction` and the CG
+  `sample_jump_detection`, `data_selection.min_good_fraction` and the CG
   mapmaker's zero weighting of flagged samples are all inert.
   The reader side is ready for them: the `general` reader passes the flag stream through to
   `DetectorTOD` per sample, so injecting flags in simgen is now the only missing half.

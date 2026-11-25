@@ -96,11 +96,12 @@ class DetectorGroupTOD:
                 yield iscan, det
 
     def apply_N_inv(self, tod: NDArray, noise_params: NDArray, samprate: float|None = None,
-                    inplace=False) -> NDArray:
+                    inplace=False, power: float = 1.0) -> NDArray:
         """ Applies the inverse noise covariance N^-1 of this Det-Group to the input TOD, using the
             specified noise parameters. If a sample rate is specified, the TOD is assumed to have
             been downsampled, and the noise level is scaled accordingly. The DC (mean) mode is
-            projected out, matching the Commander3 ``multiply_inv_N`` convention.
+            projected out, matching the Commander3 ``multiply_inv_N`` convention. ``power`` applies
+            N^-power instead; 0.5 gives the whitening filter N^-1/2.
         """
         actual_samprate = samprate if samprate is not None else self.fsamp
         tod_out = tod if inplace else np.zeros_like(tod)
@@ -110,7 +111,7 @@ class DetectorGroupTOD:
             scale = float(noise_params[0])**2
             if samprate is not None and samprate != self.fsamp:
                 scale *= samprate/self.fsamp
-            tod_out[:] = tod/scale
+            tod_out[:] = tod/scale**power
             tod_out -= np.mean(tod_out)  # Project out the DC mode (mean).
             return tod_out
 
@@ -121,7 +122,7 @@ class DetectorGroupTOD:
         if samprate is not None and samprate != self.fsamp:
             noise_PS *= samprate/self.fsamp
         tod_f = forward_rfft_mirrored(tod)
-        tod_f /= noise_PS
+        tod_f /= noise_PS**power
         tod_f[0] = 0.0  # Project out the DC mode (mean), matching Commander multiply_inv_N.
         tod_out[:] = backward_rfft_mirrored(tod_f, ntod)
         return tod_out
