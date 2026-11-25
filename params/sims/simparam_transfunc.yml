@@ -4,7 +4,8 @@
 # 18 tasks = 6 TOD + 6 CompSep-I + 6 CompSep-QU.
 #
 # This file is a copy of `simparam_compsep_only.yml` with only the paths (the six TOD filelists,
-# the output directory and the log file), the mapmaker ("CG") and Band30GHz's `tau_ms` changed.
+# the output directory and the log file), the mapmaker ("CG") and Band30GHz's `transfer_function`
+# changed.
 # So only Band30GHz deconvolves the bolometer response; the other bands are solved as if T = 1,
 # although the simulation applies it to every band. The model TODs (sky model, orbital dipole,
 # far sidelobes) are subtracted without T, a known inconsistency.
@@ -170,7 +171,8 @@ experiments:
         fwhm: 120.0
         freq: 30.0
         band_unit: "uK_RJ"
-        tau_ms: 150.0
+        transfer_function:
+          tau_ms: 150.0
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
         filelist: "../c4_sims/simgen_transfunc/Band30GHz/filelist.txt"

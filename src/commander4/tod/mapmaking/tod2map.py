@@ -82,7 +82,8 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
     with benchmark("setup"):
         binned = BinnedMapmaker(experiment_data.pixel_domain, pols, map_names,
                                 count_hits=count_hits)
-        cg = CGMapmaker(experiment_data, tod_samples, params) if use_cg else None
+        cg = (CGMapmaker(experiment_data, tod_samples, params, compsep_output=compsep_output)
+              if use_cg else None)
 
     ### MAIN SCAN LOOP ###
     # Each scan's wall time in this loop is recorded as its measured cost, for spreading the scans
@@ -118,7 +119,7 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
             continue
 
         ### THE SKY TOD AND THE NOISE RESIDUAL, in detector units ###
-        # TODO: Known bug with a bolometer transfer function T (`tf_tau_sec`). The data hold
+        # TODO: Known bug with a bolometer transfer function T (`tf`). The data hold
         # T(sky + orbital dipole + sidelobes), but the models subtracted here and in the other
         # Gibbs steps are not passed through T, so the residuals and the CG right-hand side keep
         # (1 - T) times them. To be resolved when/if we migrate to the C3-style design (deconvolve

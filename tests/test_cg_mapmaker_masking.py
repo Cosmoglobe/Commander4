@@ -19,6 +19,7 @@ from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
+from commander4.math_utils.transfer_func import AsymmetricTransferFunction, SinglePole
 from commander4.tod.samples import TODSamples
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.tod.data_selection import DataSelection
@@ -52,7 +53,8 @@ def _build_band(pix: np.ndarray, bad_idx, nside: int, sigma0: float, pols: str,
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
     band = DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=nside, nu=0.0,
                             fwhm_arcmin=0.0, fsamp=fsamp, ndet=1, pols=pols,
-                            noise_model=noise_model, tf_tau_sec=tf_tau_sec)
+                            noise_model=noise_model,
+                            tf=SinglePole(tf_tau_sec) if tf_tau_sec is not None else None)
     ts = TODSamples.__new__(TODSamples)
     ts.experiment_data, ts.band_comm = band, MPI.COMM_SELF
     ts.selection = make_step(DataSelection, 1, 1)
@@ -182,6 +184,27 @@ def test_apply_LHS_symmetric_with_nontrivial_transfer_function():
     cg = CGMapmaker(band, ts, _PARAMS)
     npix = 12 * nside**2
     rng = np.random.default_rng(5)
+    m1, m2 = rng.normal(size=(1, npix)), rng.normal(size=(1, npix))
+    Am2, Am1 = cg.apply_LHS(m2.copy()), cg.apply_LHS(m1.copy())
+    np.testing.assert_allclose(np.vdot(m1, Am2), np.vdot(m2, Am1), rtol=1e-9, atol=1e-10)
+
+
+def test_apply_LHS_symmetric_with_asymmetric_transfer_function():
+    """An asymmetric T applies its rising or falling filter where the sky model rises or falls.
+
+    The sky model is fixed during the solve, so T is a fixed operator and ``P^T T^T N^-1 T P``
+    must be symmetric. Choosing the filters from the CG iterate ``P m`` instead (as when the
+    mapmaker gets no sky model) makes the operator depend on m, and this check fails.
+    """
+    nside, sigma0 = 2, 1.3
+    npix = 12 * nside**2
+    pix = np.array([0, 1, 2, 5, 4, 6, 7, 9, 8, 10, 3, 11], dtype=np.int64)
+    band, ts = _build_band(pix, [], nside, sigma0, "I", fsamp=8.0)
+    band.tf = AsymmetricTransferFunction(tf_up=SinglePole(0.3), tf_down=SinglePole(0.05),
+                                         mask_method="bin", epsilon=0.05)
+    rng = np.random.default_rng(6)
+    sky = rng.normal(size=(1, npix))  # random, so it rises and falls along the scan
+    cg = CGMapmaker(band, ts, _PARAMS, compsep_output=sky)
     m1, m2 = rng.normal(size=(1, npix)), rng.normal(size=(1, npix))
     Am2, Am1 = cg.apply_LHS(m2.copy()), cg.apply_LHS(m1.copy())
     np.testing.assert_allclose(np.vdot(m1, Am2), np.vdot(m2, Am1), rtol=1e-9, atol=1e-10)

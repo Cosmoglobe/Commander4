@@ -10,6 +10,7 @@ from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.noise.psd import NoisePSD
 from commander4.math_utils.fft import forward_rfft_mirrored, backward_rfft_mirrored
+from commander4.math_utils.transfer_func import TransferFunction
 from commander4.units import rj_to_band_unit_factor
 
 import logging
@@ -35,7 +36,7 @@ class DetectorGroupTOD:
         ndet (int): Number of detectors per scan.
         pols (str): Polarisation configuration string (``'I'``, ``'QU'``, or ``'IQU'``).
         noise_model (NoisePSD): Noise model for this detector group.
-        tf_tau_ms (float|None): Transfer function time constant in milliseconds, or None if no TF.
+        tf (TransferFunction|None): The bolometer transfer function, or None if no TF.
         hfi_demodulation (bool): Whether this band contains alternating Planck HFI half-cycles.
         band_unit (str): The unit the band quotes its gains and maps in, outside C4 (in the
             parameter file and the chain files). C4 works internally in uK_RJ.
@@ -47,7 +48,7 @@ class DetectorGroupTOD:
     def __init__(self, scans: list[ScanTOD], experiment_name: str, band_name: str, nside: int,
                  nu: float, fwhm_arcmin: float, fsamp: float, ndet: int, pols: str,
                  noise_model: NoisePSD,
-                 tf_tau_sec: float|None = None, instrument_filepath: str|None = None,
+                 tf: TransferFunction|None = None, instrument_filepath: str|None = None,
                  hfi_demodulation: bool = False, band_unit: str = "uK_RJ", lmax: int | None = None):
         self.scans = scans
         self.nscans = len(scans)
@@ -62,7 +63,7 @@ class DetectorGroupTOD:
         self.fsamp = fsamp
         self.ndet = ndet
         self.pols = pols
-        self.tf_tau_sec = tf_tau_sec
+        self.tf = tf
         # Whether the TOD needs demodulation to be read (Planck HFI stores alternating
         # positive/negative modulation half-cycles.)
         self.hfi_demodulation = hfi_demodulation

@@ -761,6 +761,10 @@ experiments:
                               # or on the experiment. Absent = 3*eval_nside - 1.
         # mapmaker: "CG"      # Per-band override of the mapmaker. Band beats experiment
                               # beats tod_processing, for this and several other keys.
+        # transfer_function:  # Bolometer time response T, deconvolved by the CG mapmaker
+        #   tau_ms: 10.0      # only. One `tau_ms` or `tau_sec` gives a single pole; see
+                              # `_build_from_node` in math_utils/transfer_func.py for the
+                              # multi-pole and asymmetric forms. Absent = no T.
         # scan_id_start: 0    # Per-band overrides of either scan-ID bound.
         # scan_id_stop: 26862
 

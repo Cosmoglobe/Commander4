@@ -147,7 +147,8 @@ experiments:
         eval_nside: 16
         fwhm: 300.0
         freq: 30.0
-        tau_ms: 20.0
+        transfer_function:
+          tau_ms: 20.0
         band_unit: "uK_CMB"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
