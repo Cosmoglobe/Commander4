@@ -154,8 +154,13 @@ def init_mpi(params: Bunch) -> MPIInfo:
     os.environ["VECLIB_MAXIMUM_THREADS"] = f"{num_threads}"
     os.environ["NUMEXPR_NUM_THREADS"] = f"{num_threads}"
     os.environ["NUMBA_NUM_THREADS"] = f"{num_threads_numba}"
-    # I tried using numba.set_num_threads(x) here instead (or as well) but that
-    # resulted in some weirdeties, like many duplicate open file handles even when x=1.
+    
+    # Numba's default threading layer, TBB, crashes at exit on Python 3.15. The OpenMP layer is as
+    # fast for our kernels. GOMP_SPINCOUNT=0 makes idle GNU OpenMP threads sleep at once, instead
+    # of busy-waiting for milliseconds on cores that the next step (a ducc0 FFT or SHT) needs. Only
+    # GNU OpenMP reads it (numba, healpy), not Intel's (pixell, qpoint).
+    os.environ["NUMBA_THREADING_LAYER"] = "omp"
+    os.environ["GOMP_SPINCOUNT"] = "0"
 
     if False: # This code should enter production, but threadpoolctl is not yet a dependency.
         import numba

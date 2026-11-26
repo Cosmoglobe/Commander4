@@ -4,6 +4,7 @@ Run after installing Commander4:
 
     mpirun -n N c4-simgen -p path/to/param.yml
 """
+import os
 import sys
 import logging
 from argparse import ArgumentParser
@@ -31,6 +32,10 @@ def main() -> None:
 
     rank = MPI.COMM_WORLD.Get_rank()
     configure_logging(rank, args.verbose)
+    # The numba threading layer of commander4/mpi/setup.py, set before numba is imported: with
+    # numba's default (TBB), simgen can crash at exit.
+    os.environ["NUMBA_THREADING_LAYER"] = "omp"
+    os.environ["GOMP_SPINCOUNT"] = "0"
 
     # Import here (not at module load) so --help works without the heavy sky stack.
     from simgen.pipeline import run

@@ -7,3 +7,6 @@ import os
 # sets this in mpi/setup.py; tests never call that, so set it here, before numba is imported.
 # Four threads still exercise the parallel (prange) code paths.
 os.environ.setdefault("NUMBA_NUM_THREADS", "4")
+# The threading layer of mpi/setup.py: with numba's default (TBB), pytest crashes at exit.
+os.environ.setdefault("NUMBA_THREADING_LAYER", "omp")
+os.environ.setdefault("GOMP_SPINCOUNT", "0")
