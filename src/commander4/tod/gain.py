@@ -21,6 +21,7 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.diagnostics.performance import benchmark, log_memory
 from commander4.math_utils.fft import forward_rfft, backward_rfft
 from commander4.parameters.schema import read_settings
+from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.step import ChainArrays, SavedBandSample, TODStep
 from commander4.tod.view import TODView
 from commander4.units import rj_to_band_unit_factor
@@ -33,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 # Gives a warning if asked to calibrate again CMB dipole above this frequency.
 ORBITAL_DIPOLE_MAX_FREQ_GHZ = 400.0
+# The signals a gain term can be fitted against (`calibrate_against`; see `Gain`).
+CALIBRATORS = ("orbital_dipole", "sky", "sky_no_dipole")
 
 
 def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel_gain: NDArray,
@@ -76,6 +79,46 @@ def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel
     return out
 
 
+def _draw_temporal_gain(A_diag: NDArray, b: NDArray, sigma0: float, fknee: float, alpha: float,
+                        rng: np.random.Generator) -> tuple[NDArray, float]:
+    """Draw one detector's temporal gain for all its scans, in time order (BP7 Sec. 3.5).
+
+    The posterior has inverse covariance ``A + S^-1``. ``A`` is diagonal, holding each scan's
+    calibration weight ``s^T N^-1 s`` (`A_diag`), and ``S`` is the Wiener prior, the power spectrum
+    ``sigma0^2 (f/fknee)^alpha`` over the scan index (eq. 31). The draw solves
+    ``(A + S^-1) g = b + A^1/2 eta1 + S^-1/2 eta2`` (eq. 30) by CG, and has its mean removed.
+
+    Returns:
+        The draw, (nscans,), and the CG's final error (target 1e-10, at most 200 steps).
+    """
+    n = len(A_diag)
+    freqs = rfftfreq(n, d=1.0)
+    # The prior leaves the mean (f = 0) free.
+    prior_ps = np.zeros_like(freqs)
+    prior_ps[1:] = sigma0**2 * (freqs[1:]/fknee)**alpha
+    prior_ps_inv = np.zeros_like(freqs)
+    prior_ps_inv[prior_ps > 0] = 1.0/prior_ps[prior_ps > 0]
+
+    def apply_lhs(v: NDArray) -> NDArray:
+        """(A + S^-1) v."""
+        return backward_rfft(forward_rfft(v)*prior_ps_inv, n).real + A_diag*v
+
+    # The data term plus one random fluctuation each from A and from S^-1.
+    eta1 = rng.standard_normal(n)
+    eta2 = rng.standard_normal(n)
+    rhs = (b + np.sqrt(np.maximum(A_diag, 0))*eta1
+           + backward_rfft(forward_rfft(eta2)*np.sqrt(prior_ps_inv), n).real)
+    # The CG starts from the solution without the prior.
+    solver = pixell.utils.CG(apply_lhs, rhs, x0=b/(A_diag + 1e-12))
+    for _ in range(200):
+        solver.step()
+        if solver.err < 1e-10:
+            break
+    draw = solver.x
+    draw -= np.mean(draw)
+    return draw, solver.err
+
+
 class Gain(TODStep):
     """The gain of one band's detector-scans on one rank, and the three steps that sample it.
 
@@ -93,7 +136,7 @@ class Gain(TODStep):
             ``cfg.temporal_gain``: whether and from which iteration the term is sampled, the
             calibrator it is sampled against, and the TOD it is sampled from (the averaging time
             in seconds, and the fraction of an averaged block that must be good).
-            The calibrator (`calibrate_against`, see `TODView.get_calib_tod`) is one of:
+            The calibrator (`calibrate_against`, see `_calibration_sums`) is one of:
               * ``orbital_dipole``: the CMB dipole from the observer's motion, alone. It is known
                 from the spacecraft velocity and the CMB monopole temperature, without the sky
                 model, so it is the only *absolute* calibrator, and the default for the absolute
@@ -131,6 +174,9 @@ class Gain(TODStep):
                                  "calibrate_against": default_calibrator,
                                  "downsample_time": 1.0, "mask_threshold": 0.5,
                                  "white_noise_weights": False})
+            if cfg.calibrate_against not in CALIBRATORS:
+                raise ValueError(f"{term}.calibrate_against must be one of {CALIBRATORS}, not "
+                                 f"{cfg.calibrate_against!r}.")
             if (cfg.enabled and cfg.calibrate_against == "orbital_dipole"
                     and experiment_data.nu > ORBITAL_DIPOLE_MAX_FREQ_GHZ
                     and band_comm.Get_rank() == 0 and chain == 1):
@@ -215,6 +261,79 @@ class Gain(TODStep):
         self.temporal_gain *= gain_factor
 
 
+    @benchmark("eqn-setup")
+    def _calibration_sums(self, tod_samples: TODSamples, band_sky: NDArray, term: str,
+                          rng: np.random.Generator) -> tuple[NDArray, NDArray]:
+        """The two sums the gain term `term` is drawn from, for each detector-scan of this rank.
+
+        The model is ``d = g s_total + n``, with ``g = abs_gain + rel_gain + temporal_gain``. For
+        one term, fitted against the calibrator ``s`` (a part of ``s_total``), the residual is
+        ``r = g_term s + n``: the data with every signal removed at the full gain, and the term's
+        own share added back. It is built from the gains as they are now, so each term is drawn
+        given the latest draws of the others.
+
+        Args:
+            term: "abs_gain", "rel_gain" or "temporal_gain"; its settings are ``self.cfg[term]``.
+
+        Returns:
+            ``s^T N^-1 s`` and ``s^T N^-1 r``, both (nscans, ndet), 0 for rejected or absent
+            detector-scans.
+        """
+        experiment_data = tod_samples.experiment_data
+        gain_cfg = self.cfg[term]
+        # Convert the requested averaging time [s] to a number of native samples.
+        downsample_factor = max(1, round(gain_cfg.downsample_time * experiment_data.fsamp))
+        scan_view = TODView(experiment_data, tod_samples, compsep_output=band_sky,
+                            downsample_factor=downsample_factor, proc_mask_type="gain",
+                            mask_threshold=gain_cfg.mask_threshold)
+        s_N_inv_s = np.zeros((experiment_data.nscans, experiment_data.ndet))
+        s_N_inv_r = np.zeros((experiment_data.nscans, experiment_data.ndet))
+        # Rejected detector-scans (accepted_only) carry no gain information.
+        for view in scan_view.iter_focused(accepted_only=True):
+            # The calibrator. The far sidelobes see the sky model, so they belong to both sky
+            # calibrators, as in C3's s_tot.
+            if gain_cfg.calibrate_against == "orbital_dipole":
+                s_cal = view.get_orbital_dipole_tod()
+            elif gain_cfg.calibrate_against == "sky":
+                s_cal = (view.get_sky_tod() + view.get_orbital_dipole_tod()
+                         + view.get_far_sidelobe_tod())
+            else:  # "sky_no_dipole"
+                s_cal = view.get_sky_tod() + view.get_far_sidelobe_tod()
+            # Python floats, so that a float32 TOD stays float32.
+            if term == "abs_gain":
+                g_term = self.abs_gain
+            elif term == "rel_gain":
+                g_term = float(self.rel_gain[view.idet])
+            else:  # "temporal_gain"
+                g_term = float(self.temporal_gain[view.iscan, view.idet])
+            residual = view.get_tod() + g_term*s_cal
+            mask = view.get_mask(proc_mask_type="gain")
+
+            # N^-1/2 below is a Fourier filter, which would spread whatever the masked blocks hold
+            # (such as a bright Galactic residual) into the good blocks nearby. Both TODs are
+            # therefore filled with the same straight line between the means of the good blocks at
+            # each gap edge. The fill is the same linear operation on both, so the filled residual
+            # is still g_term * (filled s_cal) + noise, which keeps the gain unbiased. As in C3,
+            # the residual's fill also gets white noise. [C3: sample_calibration]
+            s_cal = np.array(s_cal, copy=True)  # The fill works in place; the dipole TOD is cached.
+            fill_all_masked(s_cal, mask, 0.0, rng)
+            fill_all_masked(residual, mask, view.sigma0/np.sqrt(view.downsample_factor), rng)
+
+            # Whiten both with N^-1/2 and fit on the good blocks only: s^T N^-1 r becomes
+            # sum(mask * s_white * r_white). [C3: accumulate_abscal] With `white_noise_weights`, N
+            # is sigma0^2 alone, as in C3's HFI runs. The TODs are block-averaged, so their rate is
+            # fsamp/downsample_factor, which apply_N_inv needs to place the 1/f noise weight at the
+            # right frequencies.
+            samprate, white_only = view.fsamp/view.downsample_factor, gain_cfg.white_noise_weights
+            s_white = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=samprate,
+                                                  power=0.5, white_only=white_only)
+            r_white = experiment_data.apply_N_inv(residual, view.noise_params, samprate=samprate,
+                                                  power=0.5, white_only=white_only)
+            s_N_inv_s[view.iscan, view.idet] = np.sum(mask * s_white**2)
+            s_N_inv_r[view.iscan, view.idet] = np.sum(mask * s_white * r_white)
+        return s_N_inv_s, s_N_inv_r
+
+
     @benchmark("abs-gain")
     def sample_absolute(self, tod_samples: TODSamples, det_compsep_map: NDArray,
                         iteration: int, rng: np.random.Generator) -> None:
@@ -227,54 +346,27 @@ class Gain(TODStep):
             rng: This rank's random generator for the gap fills and the draw.
         """
         band_comm, experiment_data = tod_samples.band_comm, tod_samples.experiment_data
-        gain_cfg = self.cfg.abs_gain
-        sum_s_T_N_inv_d = 0  # Accumulators for the numerator and denominator of eqn 16.
-        sum_s_T_N_inv_s = 0
-
-        # Convert the requested averaging time [s] to a number of native samples.
-        downsample_factor = max(1, round(gain_cfg.downsample_time * experiment_data.fsamp))
-        scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                            downsample_factor=downsample_factor,
-                            proc_mask_type="gain",
-                            mask_threshold=gain_cfg.mask_threshold)
-
-        with benchmark("eqn-setup"):
-            # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
-            for view in scan_view.iter_focused(accepted_only=True):
-                calib = view.get_calib_tod("abs", gain_cfg.calibrate_against, rng)
-                # Whiten the calibrator and the residual with N^-1/2, and fit on the good blocks
-                # only: s^T N^-1 d becomes sum(mask * s_white * r_white). [C3's accumulate_abscal]
-                # With `white_noise_weights`, N is sigma0^2 alone, as in C3's HFI runs.
-                # The TODs are block-averaged, so their rate is fsamp/downsample_factor, which
-                # apply_N_inv needs to place the 1/f noise weight at the right frequencies.
-                gain_samprate = view.fsamp / view.downsample_factor
-                s_white = experiment_data.apply_N_inv(
-                    calib.s_cal, view.noise_params, samprate=gain_samprate, power=0.5,
-                    white_only=gain_cfg.white_noise_weights)
-                r_white = experiment_data.apply_N_inv(
-                    calib.tod, view.noise_params, samprate=gain_samprate, power=0.5,
-                    white_only=gain_cfg.white_noise_weights)
-                sum_s_T_N_inv_d += np.sum(calib.mask * s_white * r_white)
-                sum_s_T_N_inv_s += np.sum(calib.mask * s_white**2)
+        s_N_inv_s, s_N_inv_r = self._calibration_sums(tod_samples, det_compsep_map,
+                                                      "abs_gain", rng)
 
         # g0 is common to all detector-scans of the band, so the sums run over all its ranks.
         with benchmark("MPI-comm"):
-            sum_s_T_N_inv_d = band_comm.reduce(sum_s_T_N_inv_d, op=MPI.SUM, root=0)
-            sum_s_T_N_inv_s = band_comm.reduce(sum_s_T_N_inv_s, op=MPI.SUM, root=0)
+            sum_s_N_inv_r = band_comm.reduce(s_N_inv_r.sum(), op=MPI.SUM, root=0)
+            sum_s_N_inv_s = band_comm.reduce(s_N_inv_s.sum(), op=MPI.SUM, root=0)
         # Default to the current value so a skipped or ill-posed solve leaves the gain unchanged.
         g_sampled = self.abs_gain
 
         # Rank 0 draws a sample of g0 from eq (16) from BP6, and bcasts it to the other ranks.
         with benchmark("eqn-solve"):
             if band_comm.Get_rank() == 0:
-                if not np.isfinite(sum_s_T_N_inv_s) or sum_s_T_N_inv_s <= 0.0:
+                if not np.isfinite(sum_s_N_inv_s) or sum_s_N_inv_s <= 0.0:
                     logger.error(f"Band {experiment_data.band_name} absolute gain has no "
                                  "calibration weight (all detector-scans rejected or zero "
                                  "calibrator): not updating.")
                 else:
                     eta = rng.standard_normal()
-                    g_mean = sum_s_T_N_inv_d / sum_s_T_N_inv_s
-                    g_std = 1.0 / np.sqrt(sum_s_T_N_inv_s)
+                    g_mean = sum_s_N_inv_r / sum_s_N_inv_s
+                    g_std = 1.0 / np.sqrt(sum_s_N_inv_s)
                     g_sampled = g_mean + eta * g_std
                     logger.info(f"Chain {tod_samples.chain} iter{iteration} "
                                 f"{experiment_data.band_name} g0: {self.abs_gain:.4e} -> "
@@ -303,45 +395,19 @@ class Gain(TODStep):
             rng: This rank's random generator for the gap fills and the draw.
         """
         band_comm, experiment_data = tod_samples.band_comm, tod_samples.experiment_data
-        gain_cfg = self.cfg.rel_gain
         ndet = experiment_data.ndet
+        s_N_inv_s, s_N_inv_r = self._calibration_sums(tod_samples, det_compsep_map,
+                                                      "rel_gain", rng)
 
-        #### 1. Local Calculation (on each rank) ###
-        # Each rank calculates the sum of terms for its local subset of scans.
-        local_s_T_N_inv_s = np.zeros(ndet, dtype=np.float64)
-        local_r_T_N_inv_s = np.zeros(ndet, dtype=np.float64)
-        # Convert the requested averaging time [s] to a number of native samples.
-        downsample_factor = max(1, round(gain_cfg.downsample_time * experiment_data.fsamp))
-        scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                            downsample_factor=downsample_factor,
-                            proc_mask_type="gain",
-                            mask_threshold=gain_cfg.mask_threshold)
-
-        with benchmark("eqn-setup"):
-            # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
-            for view in scan_view.iter_focused(accepted_only=True):
-                calib = view.get_calib_tod("rel", gain_cfg.calibrate_against, rng)
-                # Whitened calibrator and residual, summed over the good blocks, as in
-                # `sample_absolute`.
-                gain_samprate = view.fsamp / view.downsample_factor
-                s_white = experiment_data.apply_N_inv(
-                    calib.s_cal, view.noise_params, samprate=gain_samprate, power=0.5,
-                    white_only=gain_cfg.white_noise_weights)
-                r_white = experiment_data.apply_N_inv(
-                    calib.tod, view.noise_params, samprate=gain_samprate, power=0.5,
-                    white_only=gain_cfg.white_noise_weights)
-                # Add the contribution from this scan to the local sum (full-band detector column).
-                local_s_T_N_inv_s[view.idet] += np.sum(calib.mask * s_white**2)
-                local_r_T_N_inv_s[view.idet] += np.sum(calib.mask * s_white * r_white)
-
-        ### 2. Intra-Detector Reduction ###
-        # Sum the per-detector values over all ranks of the band, whose scans each hold a part of
-        # every detector. After this, every rank has each detector's total.
+        # Sum each detector's scans, then over all ranks of the band, whose scans each hold a part
+        # of every detector. After this, every rank has each detector's total.
+        det_s_N_inv_s = s_N_inv_s.sum(axis=0)
+        det_s_N_inv_r = s_N_inv_r.sum(axis=0)
         with benchmark("MPI-comm"):
-            band_comm.Allreduce(MPI.IN_PLACE, local_s_T_N_inv_s, op=MPI.SUM)
-            band_comm.Allreduce(MPI.IN_PLACE, local_r_T_N_inv_s, op=MPI.SUM)
+            band_comm.Allreduce(MPI.IN_PLACE, det_s_N_inv_s, op=MPI.SUM)
+            band_comm.Allreduce(MPI.IN_PLACE, det_s_N_inv_r, op=MPI.SUM)
 
-        ### 3. Solve Global System ###
+        # Solve the global system.
         # Solve the constrained system (sum of Delta g_i = 0) over the active detectors only;
         # detectors rejected on every scan or with a vanishing calibrator carry zero weight, are
         # held at their current value, and are excluded so the bordered matrix stays non-singular.
@@ -349,7 +415,7 @@ class Gain(TODStep):
         delta_g_samples = np.array(self.rel_gain, dtype=np.float32)
         with benchmark("eqn-solve"):
             if band_comm.Get_rank() == 0:
-                n_active = int(np.count_nonzero(local_s_T_N_inv_s > 0.0))
+                n_active = int(np.count_nonzero(det_s_N_inv_s > 0.0))
                 n_excluded = ndet - n_active
                 if n_active == 0:
                     logger.error(f"Band {experiment_data.band_name}: no detectors with "
@@ -357,7 +423,7 @@ class Gain(TODStep):
                 else:
                     try:
                         delta_g_samples = _solve_relative_gain_system(
-                            local_s_T_N_inv_s, local_r_T_N_inv_s, self.rel_gain, rng)
+                            det_s_N_inv_s, det_s_N_inv_r, self.rel_gain, rng)
                         msg = (f"Chain {tod_samples.chain} iter{iteration} "
                                f"{experiment_data.band_name}: solved relative gains for "
                                f"{n_active} active detectors")
@@ -401,40 +467,17 @@ class Gain(TODStep):
             rng: This rank's random generator for the gap fills and the draw.
         """
         band_comm, experiment_data = tod_samples.band_comm, tod_samples.experiment_data
-        gain_cfg = self.cfg.temporal_gain
         band_rank = band_comm.Get_rank()
         band_size = band_comm.Get_size()
         ndet = experiment_data.ndet
         nscans_local = len(experiment_data.scans)
-
-        # Local calculations on each rank
-        A_qq_local = np.zeros((ndet, nscans_local), dtype=np.float64)
-        b_q_local = np.zeros((ndet, nscans_local), dtype=np.float64)
+        # Rejected detector-scans have zero weight; the Wiener prior then fills their temporal
+        # gain from their neighbours.
+        s_N_inv_s, s_N_inv_r = self._calibration_sums(tod_samples, det_compsep_map,
+                                                      "temporal_gain", rng)
         # (sigma0, fknee, alpha) of the Wiener prior, filled below by whichever rank solves a
         # detector and summed across the band afterwards, so the chain records the prior used.
         gain_prior_local = np.zeros((ndet, 3), dtype=np.float64)
-        # Convert the requested averaging time [s] to a number of native samples.
-        downsample_factor = max(1, round(gain_cfg.downsample_time * experiment_data.fsamp))
-        scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                            downsample_factor=downsample_factor,
-                            proc_mask_type="gain",
-                            mask_threshold=gain_cfg.mask_threshold)
-
-        # Rejected detector-scans (accepted_only) contribute zero weight (A_qq = b_q = 0); the
-        # Wiener prior then fills their temporal gain from neighbors.
-        for view in scan_view.iter_focused(accepted_only=True):
-            calib = view.get_calib_tod("temp", gain_cfg.calibrate_against, rng)
-            # Whitened calibrator and residual, summed over the good blocks, as in
-            # `sample_absolute`.
-            gain_samprate = view.fsamp / view.downsample_factor
-            s_white = experiment_data.apply_N_inv(
-                calib.s_cal, view.noise_params, samprate=gain_samprate, power=0.5,
-                white_only=gain_cfg.white_noise_weights)
-            r_white = experiment_data.apply_N_inv(
-                calib.tod, view.noise_params, samprate=gain_samprate, power=0.5,
-                white_only=gain_cfg.white_noise_weights)
-            A_qq_local[view.idet, view.iscan] = np.sum(calib.mask * s_white**2)
-            b_q_local[view.idet, view.iscan] = np.sum(calib.mask * s_white * r_white)
 
         # Gather scan counts on all ranks (needed for gather/scatter with varying roots)
         scan_counts = np.array(band_comm.allgather(nscans_local), dtype=int)
@@ -450,8 +493,8 @@ class Gain(TODStep):
         for idet in range(ndet):
             solving_rank = idet % band_size
 
-            all_A_qq = band_comm.gather(A_qq_local[idet], root=solving_rank)
-            all_b_q = band_comm.gather(b_q_local[idet], root=solving_rank)
+            all_A_qq = band_comm.gather(s_N_inv_s[:, idet], root=solving_rank)
+            all_b_q = band_comm.gather(s_N_inv_r[:, idet], root=solving_rank)
 
             delta_g_sample = None
             if band_rank == solving_rank:
@@ -467,61 +510,18 @@ class Gain(TODStep):
 
                     # However, I found the BP prior too weak, and this gives me more sensible
                     # results.
-                    mean_gain = self.abs_gain + self.rel_gain[idet]
-                    sigma0_gain = 1e-4*mean_gain
-                    sigma0_sq_gain = sigma0_gain**2
+                    sigma0_gain = 1e-4*(self.abs_gain + self.rel_gain[idet])
                     # Record the prior this detector was actually sampled under, for the chain
                     # file. Only the solving rank knows it, hence the Allreduce after the detector
                     # loop.
                     gain_prior_local[idet] = (sigma0_gain, fknee_gain, alpha_gain)
 
-                    gain_freqs = rfftfreq(n_scans_total, d=1.0)
-                    prior_ps = np.zeros_like(gain_freqs)
-                    prior_ps[1:] = (sigma0_sq_gain
-                                    * (np.abs(gain_freqs[1:]) / fknee_gain)**alpha_gain)
-
-                    prior_ps_inv = np.zeros_like(gain_freqs)
-                    prior_ps_inv[prior_ps > 0] = 1.0 / prior_ps[prior_ps > 0]
-                    prior_ps_inv_sqrt = np.sqrt(prior_ps_inv)
-
-                    # Define Linear Operator for Conjugate Gradient Solver
-                    def matvec(v, A_diag=A_diag, prior_ps_inv=prior_ps_inv,
-                               n_scans_total=n_scans_total):
-                        g_inv_v = backward_rfft(forward_rfft(v) * prior_ps_inv,
-                                                n_scans_total).real
-                        diag_v = A_diag * v
-                        return g_inv_v + diag_v
-
-                    # Construct RHS of the sampling equation (Eq. 30)
-                    eta1 = rng.standard_normal(n_scans_total)
-                    fluctuation1 = np.sqrt(np.maximum(A_diag, 0)) * eta1
-
-                    eta2 = rng.standard_normal(n_scans_total)
-                    fluctuation2 = backward_rfft(forward_rfft(eta2) * prior_ps_inv_sqrt,
-                                                 n_scans_total).real
-
-                    RHS = b + fluctuation1 + fluctuation2
-
-                    # The CG starts from the solution without the prior.
-                    g_mean = b / (A_diag + 1e-12)
-                    CG_solver = pixell.utils.CG(matvec, RHS, x0=g_mean)
-                    for i in range(200):
-                        CG_solver.step()
-                        if CG_solver.err < 1e-10:
-                            break
-                    if CG_solver.err >= 1e-10:
+                    delta_g_sample, cg_err = _draw_temporal_gain(A_diag, b, sigma0_gain,
+                                                                 fknee_gain, alpha_gain, rng)
+                    if cg_err >= 1e-10:
                         logger.warning(f"Band {experiment_data.band_name} detector {idet}: the "
                                        f"temporal-gain CG stopped after 200 steps with error "
-                                       f"{CG_solver.err:.1e}, above its target of 1e-10.")
-
-                    delta_g_sample = CG_solver.x
-                    delta_g_sample -= np.mean(delta_g_sample)
-                    # logger.info(f"Band {experiment_data.nu}GHz det {idet} time-dependent "\
-                    #             f"gain: min={np.min(delta_g_sample)*1e9:14.4f} "\
-                    #             f"mean={np.mean(delta_g_sample)*1e9:14.4f} "\
-                    #             f"std={np.std(delta_g_sample)*1e9:14.4f} "\
-                    #             f"max={np.max(delta_g_sample)*1e9:14.4f}")
-
+                                       f"{cg_err:.1e}, above its target of 1e-10.")
                 else:
                     delta_g_sample = np.zeros(n_scans_total)
 

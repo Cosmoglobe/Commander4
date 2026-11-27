@@ -1,13 +1,5 @@
-"""Tests for the gain-calibration configuration and the unified calibrator builder.
-
-Covers two new pieces introduced when the three gain-sampling procedures became nested
-parameter-file blocks with a per-term ``calibrate_against`` target:
-
-* the calibrator each gain term uses, with a per-band override
-  taking precedence over the general-block value, which falls back to the term default.
-* ``TODView.get_calib_tod`` - builds the calibration residual for one gain term against a
-  chosen calibrator signal, replacing the former per-term ``get_*_calib_tod`` methods.
-"""
+"""The gain sampling: its settings, the sums each term is drawn from, the three solves, and the
+block-averaged TODs the gain fit reads from `TODView`."""
 
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -17,11 +9,15 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
+from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pixel_domain import PixelDomain
+from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.data_selection import DataSelection
 from commander4.tod.glitches.sampling import Glitches
 from commander4.tod.hfi_demodulation import HFIModulation
 from commander4.tod.jumps.sampling import Jumps
+from commander4.tod.noise.gap_filling import fill_all_masked
+from commander4.tod.noise.psd import NoisePSDOof
 from commander4.tod.sidelobe_deconvolve import FarSidelobes
 from commander4.tod.view import TODView
 from commander4.tod.gain import Gain, _solve_relative_gain_system
@@ -41,6 +37,51 @@ def _gain_step(global_blocks: dict | None = None, band_blocks: dict | None = Non
                    experiments=Bunch(EXP=Bunch(bands=Bunch(BAND=Bunch(**(band_blocks or {}))))))
     return Gain(experiment, params, params.experiments.EXP.bands.BAND,
                 SimpleNamespace(Get_rank=lambda: rank, allreduce=lambda value: value), chain)
+
+
+class _FakeScan:
+    """One detector-scan as `Gain._calibration_sums` reads it: the three signal models, the data
+    with every signal removed at the full gain (`get_tod`), the gain mask and the noise."""
+
+    def __init__(self, iscan: int, tod: np.ndarray, s_sky: np.ndarray | None = None,
+                 s_orb: np.ndarray | None = None, s_sl: np.ndarray | None = None,
+                 mask: np.ndarray | None = None, noise_params: tuple = (1.0, 0.1, -1.0),
+                 fsamp: float = 1.0, downsample_factor: int = 1):
+        zeros = np.zeros_like(tod)
+        self.iscan, self.idet = iscan, 0
+        self.tod = tod
+        self.s_sky = zeros if s_sky is None else s_sky
+        self.s_orb = zeros if s_orb is None else s_orb
+        self.s_sl = zeros if s_sl is None else s_sl
+        self.mask = np.ones(tod.size, dtype=bool) if mask is None else mask
+        self.noise_params = np.array(noise_params)
+        self.sigma0 = 0.0  # No white noise in the filled blocks, so the sums are exact.
+        self.fsamp, self.downsample_factor = fsamp, downsample_factor
+
+    def get_sky_tod(self): return self.s_sky
+    def get_orbital_dipole_tod(self): return self.s_orb
+    def get_far_sidelobe_tod(self): return self.s_sl
+    def get_tod(self): return self.tod.copy()
+    def get_mask(self, proc_mask_type): return self.mask
+
+
+def _band(nscans: int, fsamp: float = 1.0, white_noise: bool = True) -> DetectorGroupTOD:
+    """Band EXP/BAND with one detector and `nscans` scans (IDs 1, 2, ...), holding no data."""
+    model = NoisePSDOof()
+    model.is_white = white_noise
+    scans = [ScanTOD([], 0.0, scan_id) for scan_id in range(1, nscans + 1)]
+    return DetectorGroupTOD(scans, "EXP", "BAND", 1, 100.0, 0.0, fsamp, 1, "I", model)
+
+
+def _sums(monkeypatch: pytest.MonkeyPatch, gains: Gain, band: DetectorGroupTOD,
+          scans: list[_FakeScan], term: str) -> tuple[np.ndarray, np.ndarray]:
+    """`gains._calibration_sums` for `term`, over the detector-scans `scans` of `band`."""
+    import commander4.tod.gain as gain
+
+    monkeypatch.setattr(gain, "TODView", lambda *args, **kwargs: SimpleNamespace(
+        iter_focused=lambda **kwargs: iter(scans)))
+    return gains._calibration_sums(SimpleNamespace(experiment_data=band), None, term,
+                                   np.random.default_rng(0))
 
 
 def test_the_initial_gain_split_uses_the_whole_band():
@@ -121,50 +162,42 @@ def test_each_sampled_gain_term_warns_about_dipole_calibration(
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 @pytest.mark.parametrize("white_noise", [False, True])
 @pytest.mark.parametrize("white_weights", [False, True])
-def test_absolute_gain_is_fitted_to_the_whitened_good_blocks(
+def test_absolute_gain_sums_come_from_the_filled_whitened_good_blocks(
     monkeypatch: pytest.MonkeyPatch, dtype: type, white_noise: bool, white_weights: bool,
 ) -> None:
-    """The gain mean and fluctuation come from the N^-1/2-whitened calibrator and residual,
-    summed over the good blocks only, at the block-averaged sample rate (as C3's
+    """s^T N^-1 s and s^T N^-1 r come from the gap-filled, N^-1/2-whitened calibrator and
+    residual, summed over the good blocks only, at the block-averaged sample rate (as C3's
     `accumulate_abscal`). With `white_noise_weights`, N is the white-noise level alone."""
-    from mpi4py import MPI
-    from commander4.data_models.detector_group_tod import DetectorGroupTOD
-    from commander4.tod.noise.psd import NoisePSDOof
-    import commander4.tod.gain as gain
-
-    model = NoisePSDOof()
-    model.is_white = white_noise
-    experiment = DetectorGroupTOD([], "EXP", "BAND", 1, 100.0, 0.0, 180.0, 1, "I", model)
-    rng = np.random.default_rng(13)
-    views = []
-    numerator = denominator = 0.0
-    for length in (997, 1024):
-        calibrator = rng.normal(size=length).astype(dtype)
-        residual = (0.7 * calibrator + rng.normal(size=length) + 3.5).astype(dtype)
-        mask = rng.random(length) > 0.3
-        noise_params = np.array([2.0, 0.1, -1.5])
-        calib = SimpleNamespace(s_cal=calibrator, tod=residual, mask=mask)
-        views.append(SimpleNamespace(fsamp=180.0, downsample_factor=180,
-                                     noise_params=noise_params,
-                                     get_calib_tod=lambda *args, calib=calib: calib))
-        s_white = experiment.apply_N_inv(calibrator, noise_params, samprate=1.0, power=0.5,
-                                         white_only=white_weights)
-        r_white = experiment.apply_N_inv(residual, noise_params, samprate=1.0, power=0.5,
-                                         white_only=white_weights)
-        numerator += np.sum(s_white[mask] * r_white[mask])
-        denominator += np.sum(s_white[mask]**2)
-
-    scan_view = SimpleNamespace(iter_focused=lambda **kwargs: iter(views))
-    monkeypatch.setattr(gain, "TODView", lambda *args, **kwargs: scan_view)
+    band = _band(2, fsamp=180.0, white_noise=white_noise)
     gains = _gain_step({"abs_gain": {"downsample_time": 1.0,
                                      "white_noise_weights": white_weights}})
     gains.abs_gain = 1.0
-    samples = SimpleNamespace(band_comm=MPI.COMM_SELF, experiment_data=experiment, chain=1)
-    gains.sample_absolute(samples, None, 1, SimpleNamespace(standard_normal=lambda: 0.37))
+    rng = np.random.default_rng(13)
+    scans = []
+    expected_s_N_inv_s = expected_s_N_inv_r = 0.0
+    for iscan, length in enumerate((997, 1024)):
+        calibrator = rng.normal(size=length).astype(dtype)
+        residual = (0.7 * calibrator + rng.normal(size=length) + 3.5).astype(dtype)
+        mask = rng.random(length) > 0.3
+        noise_params = (2.0, 0.1, -1.5)
+        # The orbital dipole is the calibrator, and `get_tod` has it removed at the gain of 1.
+        scans.append(_FakeScan(iscan, residual - calibrator, s_orb=calibrator, mask=mask,
+                               noise_params=noise_params, fsamp=180.0, downsample_factor=180))
+        s_filled, r_filled = calibrator.copy(), (residual - calibrator) + calibrator
+        fill_all_masked(s_filled, mask, 0.0, np.random.default_rng(0))
+        fill_all_masked(r_filled, mask, 0.0, np.random.default_rng(0))
+        s_white = band.apply_N_inv(s_filled, np.array(noise_params), samprate=1.0, power=0.5,
+                                   white_only=white_weights)
+        r_white = band.apply_N_inv(r_filled, np.array(noise_params), samprate=1.0, power=0.5,
+                                   white_only=white_weights)
+        expected_s_N_inv_s += np.sum(s_white[mask]**2)
+        expected_s_N_inv_r += np.sum(s_white[mask] * r_white[mask])
 
-    expected = numerator / denominator + 0.37 / np.sqrt(denominator)
+    s_N_inv_s, s_N_inv_r = _sums(monkeypatch, gains, band, scans, "abs_gain")
+
     tolerance = 2e-6 if dtype == np.float32 else 1e-12
-    assert gains.abs_gain == pytest.approx(expected, rel=tolerance)
+    assert s_N_inv_s.sum() == pytest.approx(expected_s_N_inv_s, rel=tolerance)
+    assert s_N_inv_r.sum() == pytest.approx(expected_s_N_inv_r, rel=tolerance)
 
 
 def test_masked_blocks_do_not_pull_the_absolute_gain_toward_its_old_value(
@@ -173,8 +206,6 @@ def test_masked_blocks_do_not_pull_the_absolute_gain_toward_its_old_value(
     """With most of the calibrator weight inside the mask, the draw lands at the true gain, not
     near the old one. Here a bright crossing that the sky model gets 20% wrong is masked, and the
     gain starts at twice the true value."""
-    from commander4.data_models.detector_group_tod import DetectorGroupTOD
-    from commander4.tod.noise.psd import NoisePSDOof
     import commander4.tod.gain as gain
 
     rng = np.random.default_rng(3)
@@ -185,26 +216,14 @@ def test_masked_blocks_do_not_pull_the_absolute_gain_toward_its_old_value(
     mask = np.abs(phase - 30) > 6
     data = g_true*(s_cal + 0.2*crossing*~mask) + rng.normal(0.0, noise_rms, n)
 
-    class _MaskedView(TODView):
-        """The real `get_calib_tod` over synthetic signals, at the native rate."""
-        fsamp, sigma0, noise_params = 1.0, noise_rms, np.array([noise_rms, 0.1, -1.0])
-        def __init__(self): super().__init__(None, None)
-        def get_mask(self, good_data_mask=True, proc_mask=True, proc_mask_type=""): return mask
-        def get_gain(self, gain_terms=TODView.ALL_GAIN_TERMS): return g_old
-        def get_sky_tod(self): return s_cal
-        def get_orbital_dipole_tod(self): return np.zeros(n)
-        def get_far_sidelobe_tod(self): return np.zeros(n)
-        def get_tod(self, *, keep=()): return data - g_old*s_cal
-
-    model = NoisePSDOof()
-    model.is_white = True
-    experiment = DetectorGroupTOD([], "EXP", "BAND", 1, 100.0, 0.0, 1.0, 1, "I", model)
-    view = _MaskedView()
-    scan_view = SimpleNamespace(iter_focused=lambda **kwargs: iter([view]))
-    monkeypatch.setattr(gain, "TODView", lambda *args, **kwargs: scan_view)
+    # The sky model is the calibrator, and `get_tod` has it removed at the old gain.
+    scan = _FakeScan(0, data - g_old*s_cal, s_sky=s_cal, mask=mask,
+                     noise_params=(noise_rms, 0.1, -1.0))
+    monkeypatch.setattr(gain, "TODView", lambda *args, **kwargs: SimpleNamespace(
+        iter_focused=lambda **kwargs: iter([scan])))
     gains = _gain_step({"abs_gain": {"downsample_time": 0.0, "calibrate_against": "sky"}})
     gains.abs_gain = g_old
-    samples = SimpleNamespace(band_comm=MPI.COMM_SELF, experiment_data=experiment, chain=1)
+    samples = SimpleNamespace(band_comm=MPI.COMM_SELF, experiment_data=_band(1), chain=1)
     gains.sample_absolute(samples, None, 1, np.random.default_rng(0))
 
     # The draw's own scatter is noise_rms/sqrt(sum of s^2 over the good blocks), about 0.004 here.
@@ -218,16 +237,13 @@ def test_temporal_gain_is_solved_in_time_order(monkeypatch: pytest.MonkeyPatch) 
     The Wiener prior couples scans that are neighbours in time, so a solve in rank order would
     pair the wrong scans and change the result.
     """
-    from commander4.data_models.detector_group_tod import DetectorGroupTOD
-    from commander4.data_models.scan_tod import ScanTOD
-    from commander4.tod.noise.psd import NoisePSDOof
     import commander4.tod.gain as gain
 
     rng = np.random.default_rng(5)
     nscans = 6
-    # One calibration problem per scan, listed by the scan's place in time.
-    calibs = [SimpleNamespace(s_cal=rng.normal(size=500), tod=rng.normal(size=500),
-                              mask=np.ones(500, dtype=bool)) for _ in range(nscans)]
+    # One calibrator and residual per scan, listed by the scan's place in time.
+    calibs = [SimpleNamespace(s_cal=rng.normal(size=500), tod=rng.normal(size=500))
+              for _ in range(nscans)]
     model = NoisePSDOof()
     model.is_white = True
 
@@ -237,9 +253,8 @@ def test_temporal_gain_is_solved_in_time_order(monkeypatch: pytest.MonkeyPatch) 
         scan_ids = 100 + 10*time_order
         scans = [ScanTOD([], 0.0, int(scan_id)) for scan_id in scan_ids]
         experiment = DetectorGroupTOD(scans, "EXP", "BAND", 1, 100.0, 0.0, 10.0, 1, "I", model)
-        views = [SimpleNamespace(iscan=iscan, idet=0, fsamp=10.0, downsample_factor=1,
-                                 noise_params=np.array([1.0, 0.1, -1.0]),
-                                 get_calib_tod=Mock(return_value=calibs[t]))
+        # The temporal gain starts at 0, so `get_tod` is the residual itself.
+        views = [_FakeScan(iscan, calibs[t].tod, s_sky=calibs[t].s_cal, fsamp=10.0)
                  for iscan, t in enumerate(time_order)]
         scan_view = SimpleNamespace(iter_focused=Mock(return_value=iter(views)))
         monkeypatch.setattr(gain, "TODView", Mock(return_value=scan_view))
@@ -257,6 +272,20 @@ def test_temporal_gain_is_solved_in_time_order(monkeypatch: pytest.MonkeyPatch) 
     shuffled = solve(shuffled_order)
 
     np.testing.assert_array_equal(shuffled, in_time_order[shuffled_order])
+
+
+def test_temporal_draw_without_fluctuations_or_prior_is_the_per_scan_fit_minus_its_mean() -> None:
+    from commander4.tod.gain import _draw_temporal_gain
+
+    rng = np.random.default_rng(0)
+    weights = rng.uniform(1.0, 2.0, 500)
+    per_scan_fit = rng.normal(size=500)
+    no_fluctuations = SimpleNamespace(standard_normal=lambda n: np.zeros(n))
+    # sigma0 = 1e6 makes the prior's inverse power at most 1e-12.
+    draw, cg_err = _draw_temporal_gain(weights, weights*per_scan_fit, 1e6, 1.0, -2.5,
+                                       no_fluctuations)
+    assert cg_err < 1e-10
+    np.testing.assert_allclose(draw, per_scan_fit - per_scan_fit.mean(), atol=1e-10)
 
 
 # --------------------------------------------------------------------------------------
@@ -316,90 +345,70 @@ def test_band_override_can_change_every_gain_option():
 
 
 # --------------------------------------------------------------------------------------
-# TODView.get_calib_tod
+# Gain._calibration_sums: the calibrator and the residual of each term
 # --------------------------------------------------------------------------------------
-class _StubView(TODView):
-    """A TODView with fixed sky, orbital-dipole and far-sidelobe signals and fixed gain terms,
-    whose data are ``(g_abs + g_rel + g_temp) * (s_sky + s_orb + s_sl) + noise``, so get_calib_tod
-    can be tested in isolation."""
-
-    GAINS = {"abs": 2.0, "rel": 0.3, "temp": 0.05}
-    sigma0 = 0.0  # No white noise in the filled blocks, so the fill can be checked exactly.
-
-    def __init__(self, mask=None):
-        super().__init__(None, None)
-        self.s_sky = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
-        self.s_orb = np.array([10.0, 20.0, 30.0, 40.0, 50.0, 60.0])
-        self.s_sl = np.array([0.5, -0.5, 0.25, -0.25, 0.5, -0.5])
-        self.noise = np.array([0.1, -0.2, 0.3, -0.4, 0.2, -0.1])
-        self.mask = np.ones(self.s_sky.size, dtype=bool) if mask is None else mask
-
-    def get_mask(self, good_data_mask=True, proc_mask=True, proc_mask_type=""):
-        return self.mask
-
-    def get_gain(self, gain_terms=TODView.ALL_GAIN_TERMS):
-        return sum(self.GAINS[term] for term in gain_terms)
-
-    def get_sky_tod(self):
-        return self.s_sky
-
-    def get_orbital_dipole_tod(self):
-        return self.s_orb
-
-    def get_far_sidelobe_tod(self):
-        return self.s_sl
-
-    def get_tod(self, *, keep=()):
-        """The data minus all three signals at the full gain, as the real `get_tod` gives them."""
-        assert keep == ()
-        return self.noise.copy()
+# Distinct values for the three gain terms, and three signal models, on six samples.
+_GAINS = {"abs_gain": 2.0, "rel_gain": 0.3, "temporal_gain": 0.05}
+_S_SKY = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+_S_ORB = np.array([10.0, 20.0, 30.0, 40.0, 50.0, 60.0])
+_S_SL = np.array([0.5, -0.5, 0.25, -0.25, 0.5, -0.5])
 
 
-@pytest.mark.parametrize("target,calib,scal", [
-    ("abs", "orbital_dipole", "orb"),
-    ("abs", "sky", "sky+orb+sl"),
-    ("rel", "sky", "sky+orb+sl"),
-    ("temp", "sky", "sky+orb+sl"),
-    ("abs", "sky_no_dipole", "sky+sl"),
+def _gains_of(term: str, calibrate_against: str) -> Gain:
+    """A `Gain` with the gain terms of `_GAINS`, fitting `term` against `calibrate_against`."""
+    gains = _gain_step({term: {"calibrate_against": calibrate_against}})
+    gains.abs_gain = _GAINS["abs_gain"]
+    gains.rel_gain = np.array([_GAINS["rel_gain"]])
+    gains.temporal_gain = np.array([[_GAINS["temporal_gain"]]])
+    return gains
+
+
+@pytest.mark.parametrize("term,calibrate_against,calibrator", [
+    ("abs_gain", "orbital_dipole", _S_ORB),
+    ("abs_gain", "sky", _S_SKY + _S_ORB + _S_SL),
+    ("rel_gain", "sky", _S_SKY + _S_ORB + _S_SL),
+    ("temporal_gain", "sky", _S_SKY + _S_ORB + _S_SL),
+    ("abs_gain", "sky_no_dipole", _S_SKY + _S_SL),
 ])
-def test_get_calib_tod_builds_residual(target, calib, scal):
-    """The residual reduces to (target gain term) * s_cal + noise. A calibrator with the sky
-    model has its far-sidelobe pickup as well, as Commander3's `s_tot`."""
-    view = _StubView()
-    out = view.get_calib_tod(target, calib, np.random.default_rng(0))
-    expected_scal = {"orb": view.s_orb, "sky+sl": view.s_sky + view.s_sl,
-                     "sky+orb+sl": view.s_sky + view.s_orb + view.s_sl}[scal]
-    np.testing.assert_allclose(out.s_cal, expected_scal)
-    np.testing.assert_allclose(out.tod, view.GAINS[target] * expected_scal + view.noise)
+def test_each_term_is_fitted_with_its_own_gain_against_its_calibrator(
+    monkeypatch: pytest.MonkeyPatch, term: str, calibrate_against: str, calibrator: np.ndarray,
+) -> None:
+    """Without noise the residual is exactly g_term * s, so s^T N^-1 r / s^T N^-1 s is the term's
+    own gain, and s^T N^-1 s shows the calibrator. A calibrator with the sky model has the
+    far-sidelobe pickup as well, as C3's `s_tot`."""
+    scan = _FakeScan(0, np.zeros(6), s_sky=_S_SKY, s_orb=_S_ORB, s_sl=_S_SL)
+    s_N_inv_s, s_N_inv_r = _sums(monkeypatch, _gains_of(term, calibrate_against), _band(1),
+                                 [scan], term)
+    # With white noise of sigma0 = 1, N^-1/2 only removes the mean.
+    assert s_N_inv_s[0, 0] == pytest.approx(np.sum((calibrator - calibrator.mean())**2))
+    assert s_N_inv_r[0, 0]/s_N_inv_s[0, 0] == pytest.approx(_GAINS[term])
 
 
-def test_get_calib_tod_rejects_bad_arguments():
-    view = _StubView()
-    rng = np.random.default_rng(0)
-    with pytest.raises(ValueError):
-        view.get_calib_tod("bogus", "sky", rng)
-    with pytest.raises(ValueError):
-        view.get_calib_tod("abs", "bogus", rng)
+def test_an_unknown_calibrator_is_refused_at_startup() -> None:
+    with pytest.raises(ValueError, match="calibrate_against"):
+        _gain_step({"rel_gain": {"calibrate_against": "dipole"}})
 
 
-def test_get_calib_tod_fills_the_masked_blocks_of_residual_and_calibrator_alike():
-    """Both get the same straight line across a gap, so the filled residual is still the target
-    gain times the filled calibrator, and nothing from inside the gap is left."""
+def test_the_masked_blocks_of_residual_and_calibrator_are_filled_alike(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both get the same straight line across a gap, so the residual stays the term's gain times
+    the calibrator, and nothing from inside the gap is left."""
     mask = np.array([True, True, False, False, True, True])
-    view = _StubView(mask)
-    view.noise[:] = 0.0
-    view.s_sky[2:4] = 1e3          # A bright, badly modelled crossing in the masked blocks.
-    out = view.get_calib_tod("rel", "sky_no_dipole", np.random.default_rng(0))
-    s_good = view.s_sky + view.s_sl
-    np.testing.assert_allclose(out.s_cal[mask], s_good[mask])
-    np.testing.assert_allclose(out.tod, view.GAINS["rel"] * out.s_cal)
+    s_sky = _S_SKY.copy()
+    s_sky[2:4] = 1e3               # A bright, badly modelled crossing in the masked blocks.
+    scan = _FakeScan(0, np.zeros(6), s_sky=s_sky, s_orb=_S_ORB.copy(), s_sl=_S_SL, mask=mask)
+    s_N_inv_s, s_N_inv_r = _sums(monkeypatch, _gains_of("rel_gain", "sky_no_dipole"), _band(1),
+                                 [scan], "rel_gain")
+    assert s_N_inv_r[0, 0]/s_N_inv_s[0, 0] == pytest.approx(_GAINS["rel_gain"])
     # The line runs between the means of the good blocks on each side of the gap.
-    left, right = s_good[:2].mean(), s_good[4:].mean()
-    np.testing.assert_allclose(out.s_cal[2:4], left + (right - left)*np.array([1, 2])/3)
-    np.testing.assert_array_equal(out.mask, mask)
+    s_filled = _S_SKY + _S_SL
+    left, right = s_filled[:2].mean(), s_filled[4:].mean()
+    s_filled[2:4] = left + (right - left)*np.array([1, 2])/3
+    assert s_N_inv_s[0, 0] == pytest.approx(np.sum(mask*(s_filled - s_filled.mean())**2))
     # The dipole calibrator is the view's cached dipole TOD itself, which the fill must not change.
-    view.get_calib_tod("abs", "orbital_dipole", np.random.default_rng(0))
-    assert view.s_orb[2] == 30.0
+    _sums(monkeypatch, _gains_of("abs_gain", "orbital_dipole"), _band(1), [scan], "abs_gain")
+    assert scan.s_orb[2] == _S_ORB[2]
 
 
 # --------------------------------------------------------------------------------------
@@ -524,15 +533,12 @@ def test_sky_downsampling_is_block_average(monkeypatch):
     assert not np.allclose(out, s_full[block_centers])
 
 
-def test_get_calib_tod_downsampled_end_to_end(monkeypatch):
-    # Absolute gain against the static sky: residual = <d> - (g_rel+g_temp)<s_sky> - g_all*<s_orb>,
-    # with every term block-averaged with the same kernel.
+def test_downsampled_get_tod_removes_the_block_averaged_signals_at_the_full_gain(monkeypatch):
+    # <d> - g_all*(<s_sky> + <s_orb>), with every term block-averaged with the same kernel.
     make_view, det, s_full = _make_real_view(monkeypatch)
     orb_full = make_view(1).get_orbital_dipole_tod()
-    out = make_view(FACTOR).get_calib_tod("abs", "sky_no_dipole", np.random.default_rng(0))
-    np.testing.assert_allclose(out.s_cal, _block_mean(s_full), rtol=2e-5, atol=1e-6)
-    expected = _block_mean(det.tod) - 0.75*_block_mean(s_full) - 2.75*_block_mean(orb_full)
-    np.testing.assert_allclose(out.tod, expected, rtol=2e-5, atol=1e-6)
+    expected = _block_mean(det.tod) - 2.75*(_block_mean(s_full) + _block_mean(orb_full))
+    np.testing.assert_allclose(make_view(FACTOR).get_tod(), expected, rtol=2e-5, atol=1e-6)
 
 
 # --------------------------------------------------------------------------------------

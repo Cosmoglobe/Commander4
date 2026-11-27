@@ -12,12 +12,9 @@ import logging
 from typing import TYPE_CHECKING
 from numpy.typing import NDArray
 
-from pixell.bunch import Bunch
-
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.pointing import remap_pix_nside
-from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.sky_projection import project_sky_to_tod, get_s_orb_tod
 
 # Type hints only: `TODSamples` imports the sampling steps, and they import this module.
@@ -42,7 +39,6 @@ class TODView:
         model reaches every step without changes there.
       * ``get_sky_tod()``, ``get_orbital_dipole_tod()`` and ``get_far_sidelobe_tod()``: the three
         signal models, in uK_RJ.
-      * The sampling-specific TODs at the bottom of the class, such as ``get_calib_tod``.
 
     Downsampling. The view carries a single ``downsample_factor``, fixed at construction: a step
     that wants a coarser rate builds its own view at that rate. ``raw_tod``, the corrected TOD
@@ -50,15 +46,13 @@ class TODView:
     TODs must be integrated over each block rather than sampled at its center. Every quantity
     exposed downstream is at the active resolution:
     ``pix`` / ``psi`` take block centers, the model and data getters (``get_tod``, ``get_sky_tod``,
-    ``get_orbital_dipole_tod``, ``get_far_sidelobe_tod``, ``get_calib_tod``) are block-averaged over
+    ``get_orbital_dipole_tod``, ``get_far_sidelobe_tod``) are block-averaged over
     the block's good samples, and ``get_mask`` keeps a block when more than ``mask_threshold`` of
     its samples pass.
     ``downsample_factor == 1`` (the default) is a no-op, so callers that never downsample see the
     full-rate arrays unchanged.
     """
 
-    # The three gain terms, for selecting which of them `get_gain` adds up.
-    ALL_GAIN_TERMS = ("abs", "rel", "temp")
     # The models `get_tod` removes from the data (see there), which its `keep` can leave in.
     MODELS = ("bright_glitches", "hfi_baselines", "jumps", "faint_glitches", "sky",
               "orbital_dipole", "far_sidelobes")
@@ -84,9 +78,9 @@ class TODView:
                 returns (1 = full resolution). Each operation that needs a coarser rate (e.g. gain
                 calibration) constructs its own view at the desired factor.
             proc_mask_type: Processing mask this view works under, in ``get_mask``'s vocabulary.
-                It is what ``get_calib_tod`` cuts on and what block-averaging averages over, so the
-                block average and the surviving-block count are taken over the same samples. Only
-                the calibration path reads it; ``get_mask`` callers still name their own mask.
+                Block-averaging averages over it, so a caller that cuts on the same mask gets the
+                block average and the surviving-block count over the same samples. ``get_mask``
+                callers still name their own mask.
             mask_threshold: Fraction of a block's samples that must pass the mask for the block to
                 survive downsampling. Unused at ``downsample_factor == 1``.
         """
@@ -208,17 +202,11 @@ class TODView:
         self._require_focus()
         return bool(self.tod_samples.selection.accept[self._iscan, self._idet])
 
-    def get_gain(self, gain_terms: tuple[str, ...] = ALL_GAIN_TERMS) -> float:
-        """Return the sum of the selected gain terms; an empty tuple gives zero."""
-        gain = 0.0
-        for term in gain_terms:
-            if term == "abs":
-                gain += self.tod_samples.gain.abs_gain
-            elif term == "rel":
-                gain += self.tod_samples.gain.rel_gain[self.idet]
-            elif term == "temp":
-                gain += self.tod_samples.gain.temporal_gain[self.iscan, self.idet]
-        return float(gain)
+    def get_gain(self) -> float:
+        """The total gain of the focused detector-scan: absolute + relative + temporal."""
+        gain = self.tod_samples.gain
+        return float(gain.abs_gain + gain.rel_gain[self.idet]
+                     + gain.temporal_gain[self.iscan, self.idet])
 
 
     # ------------------------------------------------------------------ downsampling helpers
@@ -525,58 +513,3 @@ class TODView:
                 full = np.zeros(self.detector.ntod)
             self._far_sidelobes = self._downsample_mean(full)
         return self._far_sidelobes
-
-
-    # ============================================================================================ #
-    # Sampling-specific TODs: what one sampling step works on, beyond `get_tod`. Each must be built
-    # from `get_tod` (with `keep` for the step's own model, if needed), never from `raw_tod`, so
-    # that every model added later reaches it.
-    # ============================================================================================ #
-
-    # ------------------------------------------------------------------ gain calibration
-    def get_calib_tod(self, target_term: str, calibrate_against: str,
-                      rng: np.random.Generator) -> Bunch:
-        """Return the residual, calibrator signal, and mask used to sample one gain term.
-
-        Everything is returned at the view's active downsample resolution. The detector model is
-        ``d = (g_abs + g_rel + g_temp) * (s_sky + s_orb + s_sl) + n``, with ``s_sl`` the
-        far-sidelobe pickup. To sample ``target_term`` against a calibrator signal ``s_cal`` (the
-        part of ``s_sky + s_orb + s_sl`` selected by ``calibrate_against``), the residual must be
-        ``g_target * s_cal + n``. It is therefore `get_tod`, which has all three signals removed at
-        the full gain, with ``g_target * s_cal`` added back. In the masked blocks, both the residual
-        and the calibrator hold a straight line between the gap edges instead.
-
-        Args:
-            target_term: Gain term being sampled, one of ``ALL_GAIN_TERMS`` ("abs", "rel", "temp").
-            calibrate_against: Calibrator, one of "orbital_dipole", "sky", or "sky_no_dipole".
-            rng: Random generator for the white noise in the residual's masked blocks.
-
-        Returns:
-            Bunch with ``tod`` (residual), ``s_cal``, and ``mask`` (True at the good blocks).
-        """
-        if target_term not in self.ALL_GAIN_TERMS:
-            raise ValueError(f"Unknown gain term '{target_term}'; expected one of "
-                             f"{self.ALL_GAIN_TERMS}.")
-        # The far sidelobes see the sky model, so they are part of every sky calibrator.
-        if calibrate_against == "orbital_dipole":
-            s_cal = self.get_orbital_dipole_tod()
-        elif calibrate_against == "sky":
-            s_cal = self.get_sky_tod() + self.get_orbital_dipole_tod() + self.get_far_sidelobe_tod()
-        elif calibrate_against == "sky_no_dipole":
-            s_cal = self.get_sky_tod() + self.get_far_sidelobe_tod()
-        else:
-            raise ValueError(f"Unknown calibrate_against '{calibrate_against}'; expected "
-                             f"'orbital_dipole', 'sky' or 'sky_no_dipole'.")
-
-        mask = self.get_mask(proc_mask_type=self._proc_mask_type)
-        tod = self.get_tod() + self.get_gain((target_term,)) * s_cal
-        # The gain samplers whiten both with N^-1/2, a Fourier filter that would spread whatever
-        # the masked blocks hold (such as a bright Galactic residual) into the good blocks nearby.
-        # Both are therefore filled with the same straight line between the means of the good
-        # blocks at each gap edge. Since the fill is the same linear operation on both, the filled
-        # residual is still g_target * (filled s_cal) + noise, which keeps the gain unbiased. As in
-        # C3, the residual's fill also gets white noise. [C3: sample_calibration]
-        s_cal = np.array(s_cal, copy=True)  # The fill works in place, and the dipole TOD is cached.
-        fill_all_masked(s_cal, mask, 0.0, rng)
-        fill_all_masked(tod, mask, self.sigma0/np.sqrt(self._downsample_factor), rng)
-        return Bunch(tod=tod, s_cal=s_cal, mask=mask)
