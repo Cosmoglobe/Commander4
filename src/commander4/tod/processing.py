@@ -90,7 +90,8 @@ def process_tod(mpi_info: MPIInfo, experiment_data: DetectorGroupTOD, tod_sample
     The function states the scientific order directly. Each step decides from its own settings
     (``step.cfg``) whether it runs in this iteration. Correlated noise, sigma0, diagnostics, and
     data-selection vetoes run inside the mapmaking scan loop (`tod2map`) because they operate on
-    one focused detector-scan and must occur at exact positions relative to map accumulation.
+    one focused detector-scan and must occur at exact positions relative to map accumulation. For
+    HFI, sigma0 is also estimated once right after demodulation.
 
     Args:
         experiment_data: The band's TOD.
@@ -131,6 +132,15 @@ def process_tod(mpi_info: MPIInfo, experiment_data: DetectorGroupTOD, tod_sample
     # also determines whether Python's even or odd sample indices carry the positive half-cycle.
     if hfi.cfg.enabled:
         hfi.sample(tod_samples, band_sky.local, rng)
+        # sigma0 again, from the demodulated TOD, so that the steps below use this iteration's
+        # value. The mapmaking loop estimates it once more. [C3: process_HFI_tod]
+        if noise.cfg.sample_sigma0:
+            scan_view = TODView(experiment_data, tod_samples, compsep_output=band_sky.local)
+            for view in scan_view.iter_focused(accepted_only=True):
+                noise.sample_sigma0(view)
+                # Too few valid samples under the ncorr mask give sigma0 = inf, as in `tod2map`.
+                if not (np.isfinite(view.sigma0) and view.sigma0 > 0):
+                    selection.accept[view.iscan, view.idet] = False
 
     # Jumps are steps of the demodulated TOD, so they are measured once the HFI phase is known, as
     # Commander3 stitches its HFI DC levels after demodulation.
@@ -141,8 +151,9 @@ def process_tod(mpi_info: MPIInfo, experiment_data: DetectorGroupTOD, tod_sample
     if glitches.cfg.enabled and iter >= glitches.cfg.from_iter:
         glitches.sample(tod_samples, band_sky.local, rng)
 
-    # Gain uses the previous iteration's sigma0. The new sigma0 is estimated later, inside the
-    # mapmaker scan loop, matching Commander3's gain -> n_corr -> bin_TOD order.
+    # Gain uses the latest sigma0: for HFI the one estimated above, otherwise the previous
+    # iteration's. The mapmaker scan loop then estimates it again, in C3's gain -> n_corr ->
+    # bin_TOD order.
     if gain.cfg.abs_gain.enabled and iter >= gain.cfg.abs_gain.from_iter:
         gain.sample_absolute(tod_samples, band_sky.local, iter, rng)
 
