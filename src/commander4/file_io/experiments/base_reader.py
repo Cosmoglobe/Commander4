@@ -1,7 +1,7 @@
 """`TODReader`: reads one band's scans from Commander-format HDF5 scan files.
 
 Every experiment reader is this class or a subclass of it. A subclass passes the properties of its
-experiment's file format (gain units, pointing layout, noise priors, ...) to `TODReader.__init__`.
+experiment's file format (pointing layout, noise priors, ...) to `TODReader.__init__`.
 It overrides one of the steps below only if its files need logic that the base class does not have:
 
     read()                    the scan loop; calls the steps below for every scan and detector
@@ -20,7 +20,8 @@ The file layout, one file per scan (also what ``simgen`` writes)::
     <pid>/common/{ntod, hufftree, huffsymb, vsun, time, ...}  once per scan
     <pid>/<detector>/{tod or ztod, pix, psi, flag, scalars}   once per detector-scan
 
-where ``<pid>`` is the scan ID as six digits. Entries that only some experiments carry are read
+where ``<pid>`` is the scan ID as six digits. ``scalars`` holds the starting gain [TOD units per
+band_unit], sigma0 [band_unit], f_knee and alpha. Entries that only some experiments carry are read
 when present. A detector's TOD is Huffman-compressed when it is stored as ``ztod`` rather than
 ``tod``; it is then decoded with the scan's second tree (``hufftree2``, ``huffsymb2``).
 """
@@ -66,8 +67,6 @@ class TODReader:
         noise_model: The band's noise PSD model, with priors suited to the instrument. The
             parameter file's noise settings are applied on top. None means `NoisePSDOof` with its
             own defaults.
-        gain_factor: Multiplies the first of each detector's file ``scalars``, the initial gain.
-            The standard format stores the gain in micro-units, hence 1e-6.
         boresight_pointing: The files store one boresight path per scan plus each detector's
             focal-plane offset, instead of each detector's pixels and angles.
         pol_eff_from_instrument_file: Take each detector's polarization response from
@@ -79,9 +78,8 @@ class TODReader:
     which disables the cut) for `drop_level_outliers`; and ``replace_tod_with_sim``.
     """
     def __init__(self, band_comm: MPI.Comm, params: Bunch, experiment: Bunch, band: Bunch, *,
-                 noise_model: NoisePSD | None = None, gain_factor: float = 1e-6,
-                 boresight_pointing: bool = False, pol_eff_from_instrument_file: bool = False,
-                 hfi_demodulation: bool = False):
+                 noise_model: NoisePSD | None = None, boresight_pointing: bool = False,
+                 pol_eff_from_instrument_file: bool = False, hfi_demodulation: bool = False):
         self.band_comm = band_comm
         self.experiment = experiment
         self.band = band
@@ -95,7 +93,6 @@ class TODReader:
             if band_comm.Get_rank() == 0:
                 logger.warning(f"Band {band._name} has no `band_unit`; assuming uK_RJ. Set it "
                                "explicitly (e.g. uK_CMB for CMB-calibrated gains) to silence this.")
-        self.gain_factor = gain_factor
         self.boresight_pointing = boresight_pointing
         self.hfi_demodulation = hfi_demodulation
         scope = (f"experiments.{experiment._name}",)
@@ -291,7 +288,8 @@ class TODReader:
         init_scalars = None
         if "scalars" in group:
             init_scalars = group["scalars"][()]  # [gain, sigma0, fknee, alpha]
-            init_scalars[0] *= self.gain_factor
+            # The TOD files holds sigma0 in sky units. Convert to TOD units by multiplying with gain
+            init_scalars[1] *= init_scalars[0]
         polang = header.polang[idet]
         return DetectorTOD(
             name=det_name,

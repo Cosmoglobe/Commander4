@@ -38,7 +38,7 @@ def hfi_inputs(tmp_path: Path) -> Bunch:
         pixels[name] = np.arange(16, dtype=np.int64) % 12
         angles[name] = np.linspace(0.0, np.pi, 16)
         tods[name] = np.arange(1, 17, dtype=np.float32)
-        scalars[name] = np.array([1e6, 1.0, 0.1, -1.0])
+        scalars[name] = np.array([1.0, 1.0, 0.1, -1.0])
     write_scan_file(str(scan_path), 42, 1, 180.0, 4096, 16, np.zeros(3), present_names,
                     pixels, angles, tods, scalars)
     differences = preproc_diff(np.arange(1, 17, dtype=np.int64))

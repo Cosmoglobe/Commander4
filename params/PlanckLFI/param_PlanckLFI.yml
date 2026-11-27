@@ -227,7 +227,7 @@ experiments:
         eval_nside: 512
         fwhm: 32.4 # [arcmin]
         freq: 28.4 # [GHz]
-        band_unit: "uK_CMB"
+        band_unit: "K_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
@@ -246,7 +246,7 @@ experiments:
         eval_nside: 512
         fwhm: 27.1 # [arcmin]
         freq: 44.1 # [GHz]
-        band_unit: "uK_CMB"
+        band_unit: "K_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
@@ -269,7 +269,7 @@ experiments:
         eval_nside: 1024
         fwhm: 13.3 # [arcmin]
         freq: 70.1 # [GHz]
-        band_unit: "uK_CMB"
+        band_unit: "K_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"

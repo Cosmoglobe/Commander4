@@ -12,7 +12,11 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.data_models.pixel_domain import DistributedMap
+from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.data_models.detector_tod import DetectorTOD
+from commander4.data_models.pixel_domain import DistributedMap, PixelDomain
+from commander4.data_models.pointing import PixelPointing
+from commander4.data_models.scan_tod import ScanTOD
 from commander4.parameters.schema import read_settings
 from commander4.tod.data_selection import DataSelection
 from commander4.tod.gain import Gain
@@ -55,7 +59,7 @@ def _params(**steps) -> Bunch:
 EXPERIMENT = SimpleNamespace(
     experiment_name="EXP", band_name="BAND", fsamp=20.0, nu=100.0, nside=64, nscans=0, ndet=1,
     pols="I", hfi_demodulation=False, instrument_filepath=None, band_unit_factor=1.0,
-    noise_model=SimpleNamespace(npar=1), iter_detector_scans=lambda: iter(()),
+    noise_model=SimpleNamespace(npar=1), iter_detector_scans=lambda accept=None: iter(()),
 )
 
 # The steps that have settings, by their name in `TODSamples`.
@@ -251,14 +255,15 @@ def test_data_selection_reports_during_its_own_warmup():
 # --------------------------------------------------------------------------------------
 # process_tod
 # --------------------------------------------------------------------------------------
-def _pipeline(monkeypatch: pytest.MonkeyPatch, params: Bunch) -> Bunch:
+def _pipeline(monkeypatch: pytest.MonkeyPatch, params: Bunch,
+              experiment: SimpleNamespace | DetectorGroupTOD = EXPERIMENT) -> Bunch:
     """Run the real iteration driver on steps built from `params`, with their sampling, the
-    mapmaker and the file writes recorded as calls instead of run."""
+    mapmaker and the file writes recorded as calls instead of run. The sky is zero."""
     import commander4.tod.processing as processing
 
     comm = Mock()
     mpi = Bunch(band=Bunch(comm=comm, node_comm=comm, rank=0), tod=Bunch(comm=comm))
-    samples = _steps(params)
+    samples = _steps(params, experiment)
     samples.chain = 1
     # The HFI step is switched on, so that its place in the order is checked too (its sampling
     # is recorded below, so it needs no HFI data).
@@ -280,10 +285,10 @@ def _pipeline(monkeypatch: pytest.MonkeyPatch, params: Bunch) -> Bunch:
         calls.attach_mock(operation, name)
         monkeypatch.setattr(processing, name, operation)
     monkeypatch.setattr(processing, "bench_summary", Mock())
-    sky = DistributedMap(local=None, full=None)
+    sky = DistributedMap(local=np.zeros((1, 12*experiment.nside**2)), full=None)
 
     def run(iteration: int) -> None:
-        processing.process_tod(mpi, EXPERIMENT, samples, sky, params, iteration,
+        processing.process_tod(mpi, experiment, samples, sky, params, iteration,
                                np.random.default_rng(0))
 
     return Bunch(run=run, calls=calls, samples=samples)
@@ -328,3 +333,40 @@ def test_summary_keeps_noise_wait_and_selection_warmup(
     assert summary.called == report
     if report:
         assert summary.call_args.kwargs["active"] == apply_cuts
+
+
+def _one_modulated_scan(tod: np.ndarray) -> DetectorGroupTOD:
+    """Band EXP/BAND with one HFI detector-scan holding `tod`, on an nside-1 sky."""
+    ntod = tod.size
+    pointing = PixelPointing(np.zeros(ntod, dtype=np.int64), np.zeros(ntod), 1, 1, ntod, ntod)
+    detector = DetectorTOD(
+        name="det", det_idx_fullband=0, tod=tod, pointing=pointing, sampling_rate_hz=180.0,
+        orbital_velocity_m_per_s=np.zeros(3, dtype=np.float32),
+        default_proc_mask=np.ones(12, dtype=bool), specific_proc_masks={},
+        flag=np.zeros(ntod, dtype=np.int64), bad_data_bitmask=1)
+    band = DetectorGroupTOD([ScanTOD([detector], 0.0, 1)], "EXP", "BAND", 1, 100.0, 10.0, 180.0,
+                            1, "I", SimpleNamespace(npar=1, params=np.array([1.0])),
+                            hfi_demodulation=True)
+    band.pixel_domain = PixelDomain(MPI.COMM_SELF, 1, "full")
+    return band
+
+
+@pytest.mark.parametrize("hfi_enabled", [True, False])
+def test_hfi_gain_sees_the_sigma0_of_the_demodulated_tod(monkeypatch, hfi_enabled: bool) -> None:
+    """As in C3, an HFI band estimates sigma0 right after demodulation; another band's gain keeps
+    the previous sigma0 (here the starting value 1)."""
+    noise_rms = 3.0
+    tod = np.random.default_rng(1).normal(0.0, noise_rms, 20000).astype(np.float32)
+    params = _params(abs_gain={"enabled": True})
+    params.experiments.EXP.bands.BAND.detectors = Bunch(det=Bunch(gain=1.0))
+    pipeline = _pipeline(monkeypatch, params, _one_modulated_scan(tod))
+    pipeline.samples.hfi.cfg.enabled = hfi_enabled
+    noise_params = pipeline.samples.noise.noise_params
+    sigma0_seen_by_gain = []
+    pipeline.samples.gain.sample_absolute.side_effect = (
+        lambda *args: sigma0_seen_by_gain.append(noise_params[0, 0, 0]))
+
+    pipeline.run(1)
+
+    expected = noise_rms if hfi_enabled else 1.0
+    assert sigma0_seen_by_gain == [pytest.approx(expected, rel=0.03)]

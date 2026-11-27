@@ -6,16 +6,10 @@
 # GIBBS
 # ----------------------------------------
 gibbs:
-  num_iterations: 5
+  num_iterations: 20
 
   seed: 1995
 
-  # start:
-  #   mode: new
-  #   source: "../c4_chains/HFI_test4_tod-downsamp-fix/"
-  #   chain: 1
-  #   iteration: latest
-  #   load: [tod]
 
 # ----------------------------------------
 # RESOURCES
@@ -33,7 +27,7 @@ resources:
 output:
   # All output goes here, in the subdirectories logs/, chains_bands/,
   # chains_compsep/ and plots/.
-  dir: "../c4_chains/HFI_compsep/"
+  dir: "../c4_chains/HFI_compsep_v8/"
 
   logging:
     console:
@@ -128,8 +122,9 @@ compsep:
 
   # CG amplitude sampling groups: each is a conditional constrained realization of its
   # components' amplitudes, conditioning on the components it does not list.
-  # Commander3's HFI runs split this into three groups (CMB / dust / free-free), each on its own
-  # band subset; one joint group over everything is the simpler and more complete choice.
+  # C3's HFI run has three groups: the band monopoles on a mask (3 iterations), then CMB, dust,
+  # dust_cii, free-free, synchrotron and AME on all bands (150 iterations), then the band
+  # monopoles again. C4 has no band monopoles, so only the middle group is left.
   cg_sampling_groups:
     sample_amps_CG:
       enabled: true
@@ -141,7 +136,9 @@ compsep:
       err_tol: 0.0  # No stopping criterion.
       preconditioner: JointPreconditioner
 
-  mcmc_sampling_groups: {}  # No spectral-index sampling, as in Commander3's HFI runs.
+  # No spectral-index sampling. C3's HFI run has four MH groups (dust and dust_cii beta in I, AME
+  # beta in I, dust beta in QU, synchrotron beta in QU); C4 has one beta for I and QU, and no AME.
+  mcmc_sampling_groups: {}
 
   bands:
     ### TOD BANDS ###
@@ -259,7 +256,7 @@ experiments:
     mapmaker: "bin"
     sparse_maps: true
     experiment_id: "planck_hfi"  # Decides expected data format, what TOD reader is used, etc.
-    instrument_file: "/mn/stornext/d23/cmbco/globe/planck/rimo/HFI_instrument_v6.h5"
+    instrument_file: "/mn/stornext/d23/cmbco/globe/planck/rimo/HFI_instrument_v8.h5"
     # Scans 51-23938 (OD 92-879), the range Commander3's HFI runs use. It also leaves out ODs
     # 880-882, whose tod_v2 files hold no data.
     scan_id_start: 51
@@ -277,88 +274,88 @@ experiments:
         eval_nside: 1024
         fwhm: 9.68 # [arcmin]
         freq: 100.0 # [GHz]
-        band_unit: "uK_CMB"
+        band_unit: "K_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         # The filelists Commander3's HFI runs use (hke's param_hfi_multi_v3).
         filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/filelist_100_v2_load.txt"
         detectors:
-          100-1a: {gain: 0.1039}
-          100-1b: {gain: 0.1158}
-          100-2a: {gain: 0.1399}
-          100-2b: {gain: 0.1348}
-          100-3a: {gain: 0.1308}
-          100-3b: {gain: 0.1186}
-          100-4a: {gain: 0.1382}
-          100-4b: {gain: 0.1091}
+          100-1a: {gain: 1.0e+05}
+          100-1b: {gain: 1.2e+05}
+          100-2a: {gain: 1.4e+05}
+          100-2b: {gain: 1.3e+05}
+          100-3a: {gain: 1.3e+05}
+          100-3b: {gain: 1.2e+05}
+          100-4a: {gain: 1.4e+05}
+          100-4b: {gain: 1.1e+05}
 
       Planck143GHz:
         enabled: true
         eval_nside: 2048
         fwhm: 7.30 # [arcmin]
         freq: 143.0 # [GHz]
-        band_unit: "uK_CMB"
+        band_unit: "K_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/u3/hke/data_hfi/filelist_143.txt"
         detectors:
-          143-1a: {gain: 0.1609}
-          143-1b: {gain: 0.1462}
-          143-2a: {gain: 0.1599}
-          143-2b: {gain: 0.1591}
-          143-3a: {gain: 0.1559}
-          143-3b: {gain: 0.1484}
-          143-4a: {gain: 0.1493}
-          143-4b: {gain: 0.1458}
-          143-5: {gain: 0.2156}   # 143-5/6/7 are unpolarized SWBs (RIMO polEff 1.7-6.6%).
-          143-6: {gain: 0.1794}
-          143-7: {gain: 0.2050}
+          143-1a: {gain: 1.6e+05}
+          143-1b: {gain: 1.5e+05}
+          143-2a: {gain: 1.6e+05}
+          143-2b: {gain: 1.6e+05}
+          143-3a: {gain: 1.6e+05}
+          143-3b: {gain: 1.5e+05}
+          143-4a: {gain: 1.5e+05}
+          143-4b: {gain: 1.5e+05}
+          143-5: {gain: 2.2e+05}   # 143-5/6/7 are unpolarized SWBs (RIMO polEff 1.7-6.6%).
+          143-6: {gain: 1.8e+05}
+          143-7: {gain: 2.0e+05}
 
       Planck217GHz:
         enabled: true
         eval_nside: 2048
         fwhm: 5.01 # [arcmin]
         freq: 217.0 # [GHz]
-        band_unit: "uK_CMB"
+        band_unit: "K_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/u3/hke/data_hfi/filelist_217.txt"
         detectors:
-          217-1: {gain: 0.1077}   # 217-1/2/3/4 are unpolarized SWBs (RIMO polEff 2.1-4.1%).
-          217-2: {gain: 0.1061}
-          217-3: {gain: 0.1145}
-          217-4: {gain: 0.1104}
-          217-5a: {gain: 0.09666}
-          217-5b: {gain: 0.1048}
-          217-6a: {gain: 0.1080}
-          217-6b: {gain: 0.1034}
-          217-7a: {gain: 0.1097}
-          217-7b: {gain: 0.1108}
-          217-8a: {gain: 0.1072}
-          217-8b: {gain: 0.1018}
+          217-1: {gain: 1.1e+05}   # 217-1/2/3/4 are unpolarized SWBs (RIMO polEff 2.1-4.1%).
+          217-2: {gain: 1.1e+05}
+          217-3: {gain: 1.1e+05}
+          217-4: {gain: 1.1e+05}
+          217-5a: {gain: 9.7e+04}
+          217-5b: {gain: 1.0e+05}
+          217-6a: {gain: 1.1e+05}
+          217-6b: {gain: 1.0e+05}
+          217-7a: {gain: 1.1e+05}
+          217-7b: {gain: 1.1e+05}
+          217-8a: {gain: 1.1e+05}
+          217-8b: {gain: 1.0e+05}
 
       Planck353GHz:
         enabled: true
         eval_nside: 2048
         fwhm: 4.9 # [arcmin]
         freq: 353.0 # [GHz]
-        band_unit: "uK_CMB"
+        band_unit: "K_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/u3/hke/data_hfi/filelist_353.txt"
         detectors:
-          353-1: {gain: 0.05152}  # 353-1/2/7/8 are unpolarized SWBs (RIMO polEff 3.4-8.1%).
-          353-2: {gain: 0.05753}
-          353-3a: {gain: 0.02359}
-          353-3b: {gain: 0.02575}
-          353-4a: {gain: 0.02615}
-          353-4b: {gain: 0.02628}
-          353-5a: {gain: 0.02982}
-          353-5b: {gain: 0.02988}
-          353-6a: {gain: 0.01264}
-          353-6b: {gain: 0.01038}
-          353-7: {gain: 0.02840}
-          353-8: {gain: 0.02930}
+          353-1: {gain: 5.2e+04}  # 353-1/2/7/8 are unpolarized SWBs (RIMO polEff 3.4-8.1%).
+          353-2: {gain: 5.8e+04}
+          353-3a: {gain: 2.4e+04}
+          353-3b: {gain: 2.6e+04}
+          353-4a: {gain: 2.6e+04}
+          353-4b: {gain: 2.6e+04}
+          353-5a: {gain: 3.0e+04}
+          353-5b: {gain: 3.0e+04}
+          353-6a: {gain: 1.3e+04}
+          353-6b: {gain: 1.0e+04}
+          353-7: {gain: 2.8e+04}
+          353-8: {gain: 2.9e+04}
 
       Planck545GHz:
         enabled: true
@@ -375,9 +372,9 @@ experiments:
           ncorr: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/u3/hke/data_hfi/filelist_545.txt"
         detectors:
-          545-1: {gain: 45.62}   # All three are unpolarized SWBs (RIMO polEff 4.7-5.9%).
-          545-2: {gain: 47.62}
-          545-4: {gain: 44.54}
+          545-1: {gain: 4.6e+01}   # All three are unpolarized SWBs (RIMO polEff 4.7-5.9%).
+          545-2: {gain: 4.8e+01}
+          545-4: {gain: 4.5e+01}
         abs_gain:
           calibrate_against: "sky"
 
@@ -393,9 +390,9 @@ experiments:
           ncorr: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/filelist_857_v2.txt"
         detectors:
-          857-1: {gain: 57.15}   # All four are unpolarized SWBs (RIMO polEff 6.3-8.6%).
-          857-2: {gain: 57.37}
-          857-3: {gain: 57.93}
-          857-4: {gain: 43.29}
+          857-1: {gain: 5.7e+01}   # All four are unpolarized SWBs (RIMO polEff 6.3-8.6%).
+          857-2: {gain: 5.7e+01}
+          857-3: {gain: 5.8e+01}
+          857-4: {gain: 4.3e+01}
         abs_gain:
           calibrate_against: "sky"

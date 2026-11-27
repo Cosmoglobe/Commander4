@@ -20,8 +20,8 @@
 #     relative parts are separately identifiable: a sampler that gets only the mean right is
 #     visibly distinguishable from one that gets both right.
 #   * The gains are ~1e-9 and sigma0 is scaled to match, i.e. the TODs are in *raw detector units*
-#     rather than uK_RJ. That puts the unit and gain-scale bookkeeping (`band_unit`, the micro-gain
-#     convention in the `scalars` dataset, gain-weighted mapmaking) under test at values where a
+#     rather than uK_RJ. That puts the unit and gain-scale bookkeeping (`band_unit`, the gain and
+#     sigma0 in the `scalars` dataset, gain-weighted mapmaking) under test at values where a
 #     missing or doubled conversion factor is obvious. Every other simulation here uses gain 1.0 in
 #     uK_RJ and would not catch such an error.
 #   * The beams span 120' to 40', so the bands are at genuinely different resolutions.

@@ -200,8 +200,9 @@ def run(parameter_file: str) -> int:
         oof = band.noise.oof
         fknee = float(bget(oof, "fknee", 0.0))
         alpha = float(bget(oof, "alpha", 0.0))
+        # sigma0 in the band's sky unit, as in C3's files: the reader multiplies it by the gain.
         det_scalars = {
-            det.name: np.array([det.gain * 1e6, det.sigma0, fknee, alpha], dtype=np.float64)
+            det.name: np.array([det.gain, det.sigma0 / det.gain, fknee, alpha], dtype=np.float64)
             for det in band.detectors
         }
         pid = int(si) + 1

@@ -10,12 +10,6 @@ gibbs:
 
   seed: 1995
 
-  # start:
-  #   mode: new
-  #   source: "../c4_chains/HFI_test4_tod-downsamp-fix/"
-  #   chain: 1
-  #   iteration: latest
-  #   load: [tod]
 
 # ----------------------------------------
 # RESOURCES
@@ -204,20 +198,20 @@ experiments:
         eval_nside: 2048
         fwhm: 7.30 # [arcmin]
         freq: 143.0 # [GHz]
-        band_unit: "uK_CMB"
+        band_unit: "K_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         # The filelist Commander3's HFI runs use (hke's param_hfi_multi_v3).
         filelist: "/mn/stornext/u3/hke/data_hfi/filelist_143.txt"
         detectors:
-          143-1a: {gain: 0.1609}
-          143-1b: {gain: 0.1462}
-          143-2a: {gain: 0.1599}
-          143-2b: {gain: 0.1591}
-          143-3a: {gain: 0.1559}
-          143-3b: {gain: 0.1484}
-          143-4a: {gain: 0.1493}
-          143-4b: {gain: 0.1458}
-          143-5: {gain: 0.2156}   # 143-5/6/7 are unpolarized SWBs (RIMO polEff 1.7-6.6%).
-          143-6: {gain: 0.1794}
-          143-7: {gain: 0.2050}
+          143-1a: {gain: 1.6e+05}
+          143-1b: {gain: 1.5e+05}
+          143-2a: {gain: 1.6e+05}
+          143-2b: {gain: 1.6e+05}
+          143-3a: {gain: 1.6e+05}
+          143-3b: {gain: 1.5e+05}
+          143-4a: {gain: 1.5e+05}
+          143-4b: {gain: 1.5e+05}
+          143-5: {gain: 2.2e+05}   # 143-5/6/7 are unpolarized SWBs (RIMO polEff 1.7-6.6%).
+          143-6: {gain: 1.8e+05}
+          143-7: {gain: 2.0e+05}

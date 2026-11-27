@@ -33,8 +33,7 @@ def write_scan(directory: Path, scan_id: int, tods: dict[str, np.ndarray],
     names = list(tods)
     pix = {name: np.arange(NTOD) % 12 for name in names}
     psi = {name: np.linspace(0.0, np.pi, NTOD) for name in names}
-    # The file stores the gain in micro-units, as the standard format does.
-    scalars = {name: np.array([gain*1e6, 1.0, 0.1, -1.0]) for name in names}
+    scalars = {name: np.array([gain, 1.5, 0.1, -1.0]) for name in names}
     path = str(directory / f"scan_{scan_id:06d}.h5")
     write_scan_file(path, scan_id, 1, 10.0, 4096, NTOD, np.array([1.0, 2.0, 3.0]), names, pix, psi,
                     tods, scalars, compress=False)
@@ -93,7 +92,8 @@ def test_standard_scan_is_read_by_detector_name(tmp_path: Path) -> None:
         np.testing.assert_array_equal(det.pointing.get_pix(), (np.arange(NTOD) % 12)[:NTOD_FFT])
         np.testing.assert_allclose(det.pointing.get_psi(), np.linspace(0.0, np.pi, NTOD)[:NTOD_FFT],
                                    rtol=1e-6)
-        assert det.init_scalars[0] == pytest.approx(2.0)
+        # The gain as stored; sigma0 1.5 in sky units, times the gain.
+        assert det.init_scalars[:2] == pytest.approx([2.0, 3.0])
         assert det.polang == polang
         np.testing.assert_array_equal(det.orbital_velocity_m_per_s, [1.0, 2.0, 3.0])
         assert det.good_data_mask.all()

@@ -4,7 +4,7 @@ Each scan is written to its own file with the pointing/TOD layout consumed by th
 LiteBIRD and Planck readers; a per-band ``filelist.txt`` maps scan ids to file paths. Pointing is
 Huffman-compressed with a *single per-scan tree* shared across the band's detectors (pix, psi and
 flag all decode with the file's ``hufftree``/``huffsymb``). Each detector also carries Planck-style
-``scalars``: micro-gain, sigma0, fknee and alpha.
+``scalars``: gain, sigma0, fknee and alpha.
 """
 import logging
 import os
@@ -35,8 +35,9 @@ def write_scan_file(path: str, pid: int, data_nside: int, fsamp: float, npsi: in
         npsi: Number of psi digitization bins (only used when ``compress`` is True).
         vsun: Orbital velocity (3,) at the scan midpoint [m/s, Galactic], stored as ``common/vsun``.
         det_pix/det_psi/det_tod: Per-detector pixel (int, data_nside), psi (rad), and TOD arrays.
-        det_scalars: Per-detector ``[micro_gain, sigma0, fknee, alpha]`` arrays, which the reader
-            uses as the chain's starting gain and noise parameters.
+        det_scalars: Per-detector ``[gain, sigma0, fknee, alpha]`` arrays, which the reader uses as
+            the chain's starting gain and noise parameters. The gain is in TOD units per sky unit,
+            and sigma0 in sky units, as in C3's files: the reader multiplies it by the gain.
         compress: If True (default), ``pix`` and ``psi`` are Huffman-compressed (opaque payloads the
             reader detects by type). If False they are stored as plain ``int32``/``float32`` arrays,
             which the reader reads directly (``PixelPointing`` auto-detects). NOTE:

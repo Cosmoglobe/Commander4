@@ -22,5 +22,5 @@ class PlanckHFIReader(TODReader):
                          noise_model=NoisePSDOof(
                              P_active_mean=[np.nan, 0.1, -1.0],
                              P_active_rms=[np.nan, np.inf, np.inf],
-                             P_uni=[[np.nan, np.nan], [0.01, 0.5], [-2.5, -0.25]],
+                             P_uni=[[np.nan, np.nan], [0.01, 5.0], [-2.5, -0.25]],
                              nu_fit=[[np.nan, np.nan], [0, 3.0], [0, 3.0]]))
