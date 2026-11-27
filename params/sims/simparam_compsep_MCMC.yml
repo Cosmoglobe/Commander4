@@ -108,15 +108,15 @@ compsep:
       comps: [cmb, sync, dust]
       bands: [Band30GHz, Band44GHz, Band70GHz, Band100GHz, Band217GHz, Band353GHz]
       optimize: false   # was compsep.sample_amplitudes: true
-      max_iter: 300
-      max_iter_pol: 300
+      max_iter: 30
+      max_iter_pol: 30
       err_tol: 0.0
       preconditioner: JointPreconditioner
 
   # Dust and synchrotron beta are proposed jointly (one group, one Metropolis accept/reject on the
   # joint chi^2), with the amplitude group re-solved between proposal and decision.
-  mcmc_sampling_groups:
-    sample_spectral_indices:
+  mcmc_sampling_groups: #has to be called this 
+    sample_spectral_indices: #can be called anything (e.g. dust_mcmc), can have several
       enabled: true
       # The components the group samples, and the parameter of each. `proposal_sigma` is the
       # step length in beta and `bounds` the hard limits. `prior_mean` and `prior_rms` are an
@@ -125,6 +125,8 @@ compsep:
       sample:
         dust:
           beta: {proposal_sigma: 0.01, bounds: [1.0, 2.2], prior_mean: 1.55, prior_rms: 0.3}
+          T: {proposal_sigma: 0.1, bounds: [10.0, 30.2]}
+          # adscale: {proposal_sigma: 0.01, bounds: [1.0, 2.2], prior_mean: 1.55, prior_rms: 0.3}
         sync:
           beta: {proposal_sigma: 0.01, bounds: [-4.0, -2.2], prior_mean: -3.1, prior_rms: 0.3}
       update_amplitude_groups: [sample_amps_CG]
