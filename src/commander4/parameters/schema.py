@@ -280,7 +280,7 @@ def compsep_enabled(params: Bunch) -> bool:
     """Whether component separation runs at all (default true)."""
     if "compsep" not in params:  # Block missing from parameter file entirely.
         return False
-    if "enabled" in params.compsep and not params.compsep.enabled:  # enbaled = False in param-file.
+    if "enabled" in params.compsep and not params.compsep.enabled:  # enabled = False in param-file.
         return False
     # Even if both checks above pass, compsep is implicitly disabled if there are no sampling groups
     return has_enabled_sampling_group(params)

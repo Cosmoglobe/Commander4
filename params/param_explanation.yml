@@ -382,10 +382,11 @@ compsep:
       enabled: false          # Off here: it adds `numstep` CG solves per iteration, and
                               # one more of every amplitude group at the end.
       # The components the group samples, and for each the parameters it samples, with
-      # the settings of their sampler. Only the spectral index `beta` can be sampled yet.
+      # the settings of their sampler. 
       # All parameters of the group are proposed together, and accepted or rejected
-      # together. The start value of a beta is `beta` in the component's own block. A
-      # beta that no group names stays fixed at that value.
+      # together. The start value of a sed parameter is in the component's own block. A
+      # sed parameter that no group names stays fixed at that value. The name must match
+      # to the component it is defined with (e.g. sync has no temperature parameter.)
       sample:
         dust:
           beta:
@@ -394,6 +395,9 @@ compsep:
                                   # is rejected without a solve. Absent = no limits.
             prior_mean: 1.56      # Mean and rms of a Gaussian prior on beta. Absent = a
             prior_rms: 0.1        # flat prior inside the hard limits.
+          T: 
+            proposal_sigma: 0.1
+            bounds: [10.0, 30.0]
         sync:
           beta: {proposal_sigma: 0.01, bounds: [-4.0, -2.0]}
       update_amplitude_groups: [sample_amps_CG]

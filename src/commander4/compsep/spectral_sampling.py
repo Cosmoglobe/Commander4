@@ -1,6 +1,4 @@
-"""Metropolis sampling of the spectral indices (`beta`) of one MCMC sampling group.
-
-The lines marked "beta" read or set `beta` on the components.
+"""Metropolis sampling of the spectral indices (e.g. `beta`, `T`) of one MCMC sampling group.
 """
 import logging
 from dataclasses import dataclass
@@ -37,8 +35,8 @@ class MCMCGroup:
                 "numstep": 1,                     # Metropolis steps per Gibbs iteration.
                 "chisq_bands": None,              # Bands of the chi-squared; None/"all" -> all.
                 "chisq_mask": None}               # Mask file of the chi-squared; None = no mask.
-    # The parameters of one component in `sample`. Only beta can be sampled yet.
-    COMP_DEFAULTS = {"beta": None}
+    # The parameters of one component in `sample`. 
+    # COMP_DEFAULTS = {}
     # The settings of one sampled parameter.
     PARAM_DEFAULTS = {"proposal_sigma": None,     # Step length of the proposal. Required.
                       "bounds": None,             # Hard bounds [lowest, highest]; None = none.
@@ -64,19 +62,27 @@ class MCMCGroup:
             raise ValueError(f"'{section}.sample' must name the components to sample.")
         sample = {}
         for comp_name in names_or_all(list(cfg.sample), comp_names, f"{section}.sample"):
-            location = f"{section}.sample.{comp_name}"
-            sample[comp_name] = read_settings(params, comp_name, (f"compsep.{section}.sample",),
-                                              cls.COMP_DEFAULTS)
-            if sample[comp_name].beta is None:
-                raise ValueError(f"'{location}' must name a parameter to sample: 'beta'.")
-            settings = read_settings(params, "beta", (f"compsep.{location}",), cls.PARAM_DEFAULTS)
-            if settings.proposal_sigma is None:
-                raise ValueError(f"'{location}.beta.proposal_sigma' must be set.")
-            # A prior with only one of its two numbers would be left out without a message.
-            if (settings.prior_mean is None) != (settings.prior_rms is None):
-                raise ValueError(f"'{location}.beta' must set both 'prior_mean' and 'prior_rms', "
-                                 "or neither.")
-            sample[comp_name].beta = settings
+            sample[comp_name] = {}
+            comp_location = f"{section}.sample.{comp_name}"
+            if not cfg.sample[comp_name]:
+                raise ValueError(f"'{comp_location}' must name a parameter to sample: 'beta, T, etc'.")
+            for sed_name in cfg.sample[comp_name]:
+                sed_location = f"{section}.sample.{comp_name}.{sed_name}"
+                settings = read_settings(params,sed_name, (f"compsep.{comp_location}",), cls.PARAM_DEFAULTS)
+                if settings.proposal_sigma is None:
+                    raise ValueError(f"'{sed_location}.proposal_sigma' must be set.")
+                    # A prior with only one of its two numbers would be left out without a message.
+                if (settings.prior_mean is None) != (settings.prior_rms is None):
+                    raise ValueError(f"'{sed_location}' must set both 'prior_mean' and 'prior_rms', "
+                                    "or neither.")
+                if (settings.bounds is not None):
+                    if settings.bounds[0] >= settings.bounds[1]:
+                        raise ValueError(f"'{sed_location}' bounds should be [lower,upper] or None,"
+                                         f" lower is currently larger than upper.")
+                    if ((settings.prior_mean is not None) and (settings.prior_mean > settings.bounds[1] or 
+                                                               settings.prior_mean < settings.bounds[0])):
+                        raise ValueError(f"'{sed_location}' prior_mean should be within the set bounds.")
+                sample[comp_name][sed_name] = settings
         cfg.sample = sample
         cfg.chisq_bands = names_or_all(cfg.chisq_bands, band_names, f"{section}.chisq_bands")
         enabled_groups = {group.name: group for group in amplitude_groups}
@@ -140,50 +146,69 @@ def sample_spectral_params(mpi_info: MPIInfo, group: MCMCGroup, band_map: BandMa
                            comp_list: CompList, rng: np.random.Generator) -> dict:
     """Metropolis steps on the spectral indices of one MCMC group. Every CompSep rank must call it.
 
-    Each of the `numstep` steps proposes a new `beta` for all components of the group at once,
+    Each of the `numstep` steps proposes a new `sed` (e.g. beta, T) for all components of the group at once,
     re-solves the amplitude groups in `update_amplitude_groups` (C3's `UPDATE_CG_GROUPS`), and
-    accepts or rejects the step as a whole. A rejection restores the betas and all amplitudes; an
+    accepts or rejects the step as a whole. A rejection restores the seds and all amplitudes; an
     acceptance keeps the re-solved amplitudes. `comp_list` is updated in place.
 
     Returns:
         The acceptance record for the chain file: the number of steps taken and accepted, and the
-        final beta of each sampled component, by its name.
+        final sed of each sampled component, by its name.
     """
-    compsep = mpi_info.compsep
+
     # The component objects of each sampled component: its I view and its QU view, which share
-    # one beta.
+    # one sed param.
     views = {name: [comp for comp in comp_list if comp.comp_name == name]
-             for name in group.cfg.sample}
+             for name in group.cfg.sample}   # e.g. {"dust":[dust_I,dust_QU],"sync_123":[sync_123_I,sync_123_QU]}
+    keys = [(c,p) for c,pars in group.cfg.sample.items() for p in pars] 
+    # e.g [("dust",{"beta": <settings>, "T":<settings>}),
+    #      ("sync_123",{"beta":<settings>})]
+    # in keys have [("dust","beta"),("dust","T"),("sync_123","beta")]
+    for c,p in keys:
+        for comp in views[c]:
+            if not hasattr(comp,p):
+                raise ValueError(f"Component '{comp}' has no sed parameter '{p}'")
+
+    # check that the bounds, if set, contain the starting sed
+    start_seds = {(c,p):float(getattr(views[c][0],p)) for c,p in keys}
+    for c,p in keys:
+        if group.cfg.sample[c][p].bounds is not None:
+            if ((start_seds[c,p]>group.cfg.sample[c][p].bounds[1]) or
+                (start_seds[c,p]<group.cfg.sample[c][p].bounds[0])):
+                raise ValueError(f"Component '{c}' sed parameter '{p}' has starting value " 
+                                    f"'{start_seds[c,p]}' which is outside the bounds "
+                                    f"'{group.cfg.sample[c][p].bounds}'")
 
     n_accept = 0
     for step in range(group.cfg.numstep):
         # The state before the step, for a rejection. All amplitudes are saved, because the
         # re-solve changes those of other components too. It must change nothing but amplitudes,
         # or a rejection would not undo it.
-        old_betas = {name: float(views[name][0].beta) for name in group.cfg.sample}  # beta
+        old_seds = {(c,p):float(getattr(views[c][0],p)) for c,p in keys} #sed_param p for component c
         old_amps = [comp.amps.copy() for comp in comp_list]
         old_chisq = group_chisq(mpi_info, group, band_map, comp_list)
 
-        # The master proposes a Gaussian step from the current value of each beta. A step that
-        # leaves the hard bounds of any beta is rejected at once, without a solve.
-        new_betas, in_bounds = None, True
-        if compsep.rank == 0:
-            new_betas = {name: float(rng.normal(old_betas[name], settings.beta.proposal_sigma))
-                         for name, settings in group.cfg.sample.items()}
-            for name, settings in group.cfg.sample.items():
-                bounds = settings.beta.bounds
-                if bounds is not None and not bounds[0] <= new_betas[name] <= bounds[1]:
+
+        # The master proposes a Gaussian step from the current value of each sed param. A step that
+        # leaves the hard bounds of any sed param is rejected at once, without a solve.
+        new_seds, in_bounds = None, True
+        if mpi_info.compsep.rank == 0:
+            new_seds={(c,p):float(rng.normal(old_seds[c,p],group.cfg.sample[c][p].proposal_sigma))for c,p in keys}
+            for c,p in keys:
+                bounds = group.cfg.sample[c][p].bounds
+                if bounds is not None and not bounds[0] <= new_seds[c,p] <= bounds[1]:
                     in_bounds = False
-        new_betas, in_bounds = compsep.comm.bcast((new_betas, in_bounds), root=0)
+        new_seds, in_bounds = mpi_info.compsep.comm.bcast((new_seds, in_bounds), root=0)
         if not in_bounds:
-            if compsep.rank == 0:
+            if mpi_info.compsep.rank == 0:
                 logger.verbose(f"MCMC step {step+1}/{group.cfg.numstep}: proposal out of bounds, "
-                               f"rejected ({new_betas}).")
+                               f"rejected ({new_seds}).")
             continue
 
-        for name in group.cfg.sample:
-            for comp in views[name]:
-                comp.beta = new_betas[name]  # beta
+        for c,p in keys:
+            for comp in views[c]:
+                setattr(comp,p,new_seds[c,p])
+
         with benchmark("mcmc-amp-resolve"):
             for amplitude_group in group.update_amplitude_groups:
                 sample_amplitudes(mpi_info, amplitude_group, band_map, comp_list, rng)
@@ -191,38 +216,38 @@ def sample_spectral_params(mpi_info: MPIInfo, group: MCMCGroup, band_map: BandMa
 
         # The Metropolis rule: accept with probability min(1, P_new/P_old). The proposal is
         # symmetric, so log(P_new/P_old) is the difference of -chi^2/2 plus the difference of the
-        # log priors. A Gaussian log prior is -0.5 ((beta - mean)/rms)^2; its normalization is the
+        # log priors. A Gaussian log prior is -0.5 ((sed_param - mean)/rms)^2; its normalization is the
         # same before and after, and drops out.
         accept = None
-        if compsep.rank == 0:
+        if mpi_info.compsep.rank == 0:
             old_log_prior, new_log_prior = 0.0, 0.0
-            for name, settings in group.cfg.sample.items():
-                prior_mean, prior_rms = settings.beta.prior_mean, settings.beta.prior_rms
+            for c,p in keys:
+                prior_mean, prior_rms = group.cfg.sample[c][p].prior_mean, group.cfg.sample[c][p].prior_rms
                 if prior_rms is not None:
-                    old_log_prior += -0.5*((old_betas[name] - prior_mean)/prior_rms)**2
-                    new_log_prior += -0.5*((new_betas[name] - prior_mean)/prior_rms)**2
+                    old_log_prior += -0.5*((old_seds[c,p] - prior_mean)/prior_rms)**2
+                    new_log_prior += -0.5*((new_seds[c,p] - prior_mean)/prior_rms)**2
             log_accept = -0.5*(new_chisq - old_chisq) + new_log_prior - old_log_prior
             accept = log_accept >= 0.0 or np.log(rng.random()) < log_accept
             logger.info(f"MCMC step {step+1}/{group.cfg.numstep}: "
                         f"dchisq={new_chisq - old_chisq:.3e} "
-                        f"[{'ACCEPT' if accept else 'reject'}] ({old_betas} -> {new_betas}).")
-        accept = compsep.comm.bcast(accept, root=0)
+                        f"[{'ACCEPT' if accept else 'reject'}] ({old_seds} -> {new_seds}).")
+        accept = mpi_info.compsep.comm.bcast(accept, root=0)
 
         # An acceptance keeps the amplitudes the step was judged by. C3 (`sample_specind_mh_pol`)
         # re-solves them once more here; C4 does not, on purpose.
         if accept:
             n_accept += 1
         else:
-            for name in group.cfg.sample:
-                for comp in views[name]:
-                    comp.beta = old_betas[name]  # beta
+            for c,p in keys:
+                for comp in views[c]:
+                    setattr(comp,p,old_seds[c,p])
             for comp, saved in zip(comp_list, old_amps):
                 np.copyto(comp.amps, saved)
 
-    if compsep.rank == 0:
+    if mpi_info.compsep.rank == 0:
         logger.info(f"MCMC group {group.name!r} finished: {n_accept}/{group.cfg.numstep} proposals "
                     "accepted.")
-    final_betas = {name: float(views[name][0].beta) for name in group.cfg.sample}
+    final_seds = {f"{c}.{p}": float(getattr(views[c][0],p)) for c,p in keys}
     return {"numstep": group.cfg.numstep, "n_accept": n_accept,
             "accept_rate": n_accept/group.cfg.numstep if group.cfg.numstep > 0 else float("nan"),
-            "betas": final_betas}  # beta
+            "seds": final_seds}  # sed

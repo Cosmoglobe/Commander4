@@ -175,7 +175,7 @@ def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[Amp
         comp_list: The full component list of the chain, updated in place.
         chain, iteration: The current chain and Gibbs iteration, for logging and the chain file.
     """
-    compsep = mpi_info.compsep
+    
     # Sampler statistics for the chain file (C3's nonlin-samples_*.dat and CG residual log), by
     # group name. The second amplitude pass overwrites the first.
     amplitude_stats, mcmc_stats = {}, {}
@@ -205,7 +205,7 @@ def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[Amp
 
     # The fit of the final sky model, for the chain file.
     fit_tree, band_frequencies = collect_fit_diagnostics(mpi_info, params, band_map, comp_list)
-    if compsep.rank == 0:
+    if mpi_info.compsep.rank == 0:
         # A section is written only if some group filled it.
         diagnostics = dict(fit_tree)
         if amplitude_stats:
@@ -220,7 +220,7 @@ def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[Amp
                        f"red.chisq={chisq['reduced']:.4f}, z={chisq['z']:.3f}.")
 
     with benchmark("end-barrier"):
-        compsep.comm.Barrier()
+        mpi_info.compsep.comm.Barrier()
 
-    bench_summary(compsep.comm, label="CompSep")
+    bench_summary(mpi_info.compsep.comm, label="CompSep")
     bench_reset()
