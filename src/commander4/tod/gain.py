@@ -3,7 +3,8 @@
 The gain has three terms: an absolute gain, a single number per band; a relative gain, one per
 detector under a zero-sum constraint; and a temporal term, one per detector-scan, drawn through a
 Wiener filter. They are sampled in that order once per Gibbs iteration, each against a
-configurable calibrator (orbital dipole, sky, or sky without the dipole). [C3: comm_gain_mod.f90]
+configurable calibrator (orbital dipole, sky, or sky without the dipole). BP7 is BeyondPlanck VII
+(Gjerløw et al. 2023). [C3: comm_tod_driver_mod.f90::sample_calibration, comm_tod_gain_smod.f90]
 """
 from __future__ import annotations
 
@@ -40,28 +41,27 @@ CALIBRATORS = ("orbital_dipole", "sky", "sky_no_dipole")
 
 def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel_gain: NDArray,
                                 rng: np.random.Generator) -> NDArray:
-    """ Draw relative-gain deviations Delta g_i from the BP7 Sec. 3.4 constrained Gaussian.
+    """Draw the relative gains Delta g_i from their Gaussian posterior with sum(Delta g_i) = 0
+    (BP7 Sec. 3.4).
 
-        Solves the bordered linear system enforcing ``sum(Delta g_i) = 0`` over the *active*
-        detectors only, those with nonzero calibration weight ``s_weights``. A detector rejected
-        on every scan (or with a vanishing calibrator) has ``s_weights == 0``; it would contribute
-        an all-zero row/column and, if two or more are present, make the matrix singular. Such
-        detectors are excluded from the solve (shrinking the system to the active set) and held at
-        their current relative gain.
+    Solves the bordered linear system over the *active* detectors only, those with calibration
+    weight ``s_weights > 0``. A detector rejected on every scan (or with a vanishing calibrator)
+    would add an all-zero row and column, and two of them would make the matrix singular. Such
+    detectors are left out of the solve and keep their current relative gain.
 
     Args:
-        s_weights (NDArray): Per-detector ``sum_scans s^T N^-1 s`` (calibration weight), (ndet,).
-        r_weights (NDArray): Per-detector ``sum_scans r^T N^-1 s`` (residual projection), (ndet,).
-        prev_rel_gain (NDArray): Current relative gains, kept for excluded detectors, shape (ndet,).
+        s_weights: Per-detector ``sum_scans s^T N^-1 s`` (calibration weight), (ndet,).
+        r_weights: Per-detector ``sum_scans s^T N^-1 r``, (ndet,).
+        prev_rel_gain: Current relative gains, kept for the excluded detectors, (ndet,).
         rng: Random generator for the fluctuation term.
 
     Returns:
-        NDArray: Full-length (ndet,) float32 relative-gain vector with the active entries resampled.
+        The (ndet,) relative gains, with the active entries drawn anew.
 
     Raises:
         np.linalg.LinAlgError: If the reduced system is singular (left for the caller to handle).
     """
-    out = np.array(prev_rel_gain, dtype=np.float32)
+    out = np.array(prev_rel_gain, dtype=np.float64)
     idx = np.flatnonzero(np.asarray(s_weights) > 0.0)
     n = idx.size
     if n == 0:
@@ -75,7 +75,7 @@ def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel
     b = np.zeros(n + 1)
     b[:n] = r + np.sqrt(d) * rng.standard_normal(n)
     solution = np.linalg.solve(A, b)   # Raises LinAlgError if singular.
-    out[idx] = solution[:n].astype(np.float32)
+    out[idx] = solution[:n]
     return out
 
 
@@ -337,13 +337,16 @@ class Gain(TODStep):
     @benchmark("abs-gain")
     def sample_absolute(self, tod_samples: TODSamples, det_compsep_map: NDArray,
                         iteration: int, rng: np.random.Generator) -> None:
-        """ Draw a realization of the absolute gain term, g0, which is constant across all
-            detectors and all scans within a band, using the calibrator in ``cfg.abs_gain``.
+        """Draw the absolute gain g0, one number for the whole band (BP7 eq. 16).
+
+        The posterior is Gaussian, with mean ``sum(s^T N^-1 r) / sum(s^T N^-1 s)`` and standard
+        deviation ``1/sqrt(sum(s^T N^-1 s))``, summed over every detector-scan of the band.
+
         Args:
-            tod_samples (TODSamples): The band's sampled state, which the TOD views read.
-            det_compsep_map (NDArray): The component-separation sky map for the detector.
-            iteration: Current Gibbs iteration for log context.
-            rng: This rank's random generator for the gap fills and the draw.
+            tod_samples: The band's sampled state, which the TOD views read.
+            det_compsep_map: The sky model at this rank's pixels of the band.
+            iteration: The Gibbs iteration, for the log.
+            rng: This rank's random generator, for the gap fills and the draw.
         """
         band_comm, experiment_data = tod_samples.band_comm, tod_samples.experiment_data
         s_N_inv_s, s_N_inv_r = self._calibration_sums(tod_samples, det_compsep_map,
@@ -356,7 +359,7 @@ class Gain(TODStep):
         # Default to the current value so a skipped or ill-posed solve leaves the gain unchanged.
         g_sampled = self.abs_gain
 
-        # Rank 0 draws a sample of g0 from eq (16) from BP6, and bcasts it to the other ranks.
+        # Rank 0 draws g0 and broadcasts it to the other ranks.
         with benchmark("eqn-solve"):
             if band_comm.Get_rank() == 0:
                 if not np.isfinite(sum_s_N_inv_s) or sum_s_N_inv_s <= 0.0:
@@ -386,13 +389,14 @@ class Gain(TODStep):
     @benchmark("rel-gain")
     def sample_relative(self, tod_samples: TODSamples, det_compsep_map: NDArray,
                         iteration: int, rng: np.random.Generator) -> None:
-        """ Samples the detector-dependent relative gain (Delta g_i), with the settings in
-            ``cfg.rel_gain``. This function implements the logic from Sec. 3.4 of BP7.
+        """Draw the relative gain of each detector, under the constraint that they sum to zero
+        (BP7 Sec. 3.4; the solve is `_solve_relative_gain_system`).
+
         Args:
-            tod_samples (TODSamples): The band's sampled state, which the TOD views read.
-            det_compsep_map (NDArray): The component-separation sky map for the detector.
-            iteration: Current Gibbs iteration for log context.
-            rng: This rank's random generator for the gap fills and the draw.
+            tod_samples: The band's sampled state, which the TOD views read.
+            det_compsep_map: The sky model at this rank's pixels of the band.
+            iteration: The Gibbs iteration, for the log.
+            rng: This rank's random generator, for the gap fills and the draw.
         """
         band_comm, experiment_data = tod_samples.band_comm, tod_samples.experiment_data
         ndet = experiment_data.ndet
@@ -407,12 +411,11 @@ class Gain(TODStep):
             band_comm.Allreduce(MPI.IN_PLACE, det_s_N_inv_s, op=MPI.SUM)
             band_comm.Allreduce(MPI.IN_PLACE, det_s_N_inv_r, op=MPI.SUM)
 
-        # Solve the global system.
         # Solve the constrained system (sum of Delta g_i = 0) over the active detectors only;
         # detectors rejected on every scan or with a vanishing calibrator carry zero weight, are
         # held at their current value, and are excluded so the bordered matrix stays non-singular.
         # Default: leave unchanged.
-        delta_g_samples = np.array(self.rel_gain, dtype=np.float32)
+        delta_g_samples = np.array(self.rel_gain, dtype=np.float64)
         with benchmark("eqn-solve"):
             if band_comm.Get_rank() == 0:
                 n_active = int(np.count_nonzero(det_s_N_inv_s > 0.0))
@@ -454,17 +457,16 @@ class Gain(TODStep):
     @benchmark("temp-gain")
     def sample_temporal(self, tod_samples: TODSamples, det_compsep_map: NDArray,
                         iteration: int, rng: np.random.Generator) -> None:
-        """ Samples the time-dependent relative gain variations (delta g_qi), with the settings in
-            ``cfg.temporal_gain``. This function implements the logic from Sec. 3.5 of the BP7
-            paper, using a Wiener filter to smooth the gain solution over time (PIDs). It solves a
-            global system for all scans of a given detector, which are distributed across the ranks
-            of the band_comm.
+        """Draw the temporal gain of each detector-scan, smoothed in time by a Wiener filter
+        (BP7 Sec. 3.5; the draw is `_draw_temporal_gain`).
+
+        Each detector is one system over all its scans, which lie on several ranks of the band.
 
         Args:
-            tod_samples (TODSamples): The band's sampled state, which the TOD views read.
-            det_compsep_map (NDArray): The sky model at our band.
-            iteration: Current Gibbs iteration for log context.
-            rng: This rank's random generator for the gap fills and the draw.
+            tod_samples: The band's sampled state, which the TOD views read.
+            det_compsep_map: The sky model at this rank's pixels of the band.
+            iteration: The Gibbs iteration, for the log.
+            rng: This rank's random generator, for the gap fills and the draw.
         """
         band_comm, experiment_data = tod_samples.band_comm, tod_samples.experiment_data
         band_rank = band_comm.Get_rank()
@@ -504,7 +506,7 @@ class Gain(TODStep):
 
                 n_scans_total = len(A_diag)
                 if n_scans_total > 1:
-                    # Define Prior (Wiener Filter) based on Eq. (31)
+                    # The Wiener prior, BP7 eq. 31.
                     alpha_gain = -2.5
                     fknee_gain = 1.0  # Hour (which equals 1 scan)
 
@@ -544,7 +546,7 @@ class Gain(TODStep):
 
             # Update the temporal gain of this detector
             if delta_g_local.size == nscans_local:
-                self.temporal_gain[:,idet] = delta_g_local.astype(np.float32, copy=False)
+                self.temporal_gain[:, idet] = delta_g_local
             else:
                 logger.warning(f"Rank {band_rank} received mismatched number of gain samples "\
                                f"for det {idet}. Expected {nscans_local}, got "
@@ -554,25 +556,15 @@ class Gain(TODStep):
         band_comm.Allreduce(MPI.IN_PLACE, gain_prior_local, op=MPI.SUM)
         self.gain_prior = gain_prior_local
 
-        # Only do all this work if logger.INFO is turned on.
+        # Summary over the band's present detector-scans, gathered on the band master.
         if logger.isEnabledFor(logging.INFO):
-            local_values_list: list[float] = []
-            for iscan, det in experiment_data.iter_detector_scans():
-                local_values_list.append(self.temporal_gain[iscan, det.det_idx_fullband])
-            local_values = np.asarray(local_values_list, dtype=np.float64)
-            local_count = local_values.size
-            local_sum = np.sum(local_values)
-            local_sum_sq = np.sum(local_values**2)
-            local_min = np.min(local_values) if local_count else np.inf
-            local_max = np.max(local_values) if local_count else -np.inf
-            count = band_comm.reduce(local_count, op=MPI.SUM, root=0)
-            value_sum = band_comm.reduce(local_sum, op=MPI.SUM, root=0)
-            value_sum_sq = band_comm.reduce(local_sum_sq, op=MPI.SUM, root=0)
-            value_min = band_comm.reduce(local_min, op=MPI.MIN, root=0)
-            value_max = band_comm.reduce(local_max, op=MPI.MAX, root=0)
-            if band_rank == 0 and count:
-                mean = value_sum / count
-                std = np.sqrt(max(0.0, value_sum_sq / count - mean**2))
-                logger.info(f"Chain {tod_samples.chain} iter{iteration} "
-                            f"{experiment_data.band_name} temporal gain: min={value_min:.3e}, "
-                            f"mean={mean:.3e}, std={std:.3e}, max={value_max:.3e}.")
+            local_values = np.array([self.temporal_gain[iscan, det.det_idx_fullband]
+                                     for iscan, det in experiment_data.iter_detector_scans()])
+            all_values = band_comm.gather(local_values, root=0)
+            if band_rank == 0:
+                values = np.concatenate(all_values)
+                if values.size > 0:
+                    logger.info(f"Chain {tod_samples.chain} iter{iteration} "
+                                f"{experiment_data.band_name} temporal gain: "
+                                f"min={values.min():.3e}, mean={values.mean():.3e}, "
+                                f"std={values.std():.3e}, max={values.max():.3e}.")
