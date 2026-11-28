@@ -186,10 +186,10 @@ def test_absolute_gain_sums_come_from_the_filled_whitened_good_blocks(
         s_filled, r_filled = calibrator.copy(), (residual - calibrator) + calibrator
         fill_all_masked(s_filled, mask, 0.0, np.random.default_rng(0))
         fill_all_masked(r_filled, mask, 0.0, np.random.default_rng(0))
-        s_white = band.apply_N_inv(s_filled, np.array(noise_params), samprate=1.0, power=0.5,
-                                   white_only=white_weights)
-        r_white = band.apply_N_inv(r_filled, np.array(noise_params), samprate=1.0, power=0.5,
-                                   white_only=white_weights)
+        s_white = band.noise_model.apply_N_inv(s_filled, np.array(noise_params), 180.0, 180,
+                                               power=0.5, white_only=white_weights)
+        r_white = band.noise_model.apply_N_inv(r_filled, np.array(noise_params), 180.0, 180,
+                                               power=0.5, white_only=white_weights)
         expected_s_N_inv_s += np.sum(s_white[mask]**2)
         expected_s_N_inv_r += np.sum(s_white[mask] * r_white[mask])
 

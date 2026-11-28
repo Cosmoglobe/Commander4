@@ -1,8 +1,8 @@
 """Noise PSD models and the sampling of their parameters.
 
 `NoisePSD` is the interface every model implements; `NoisePSDOof` is the 1/f model used in practice,
-P(f) = sigma0^2 (1 + (f/fknee)^alpha). A model owns both the PSD evaluation the correlated-noise
-sampler needs and the priors and grid sampling that draw its own parameters.
+P(f) = sigma0^2 (1 + (f/fknee)^alpha). A model owns the PSD evaluation, the application of N^-1 to
+a TOD, and the priors and grid sampling that draw its own parameters.
 """
 import logging
 import numpy as np
@@ -10,7 +10,7 @@ from pixell import utils
 from pixell.bunch import Bunch
 from scipy.fft import rfftfreq
 from numpy.typing import ArrayLike, NDArray
-from commander4.math_utils.fft import forward_rfft
+from commander4.math_utils.fft import forward_rfft, forward_rfft_mirrored, backward_rfft_mirrored
 from commander4.parameters.schema import resolve_param
 
 logger = logging.getLogger(__name__)
@@ -199,6 +199,33 @@ class NoisePSD:
         good = P_corr > 0
         out[good] = 1.0 / P_corr[good]
         return out
+
+    def apply_N_inv(self, tod: NDArray, noise_params: NDArray, fsamp: float,
+                    downsample_factor: int = 1, power: float = 1.0,
+                    white_only: bool = False) -> NDArray:
+        """Return N^-power applied to one detector-scan's TOD, with the mean projected out.
+
+        Args:
+            tod: The TOD. With `downsample_factor` k, each sample is the average of k raw samples.
+            noise_params: The detector-scan's noise parameters.
+            fsamp: The raw sample rate in Hz, at which the noise parameters are defined.
+            downsample_factor: The number of raw samples averaged into each sample of `tod`.
+            power: 1 gives N^-1; 0.5 gives the whitening filter N^-1/2.
+            white_only: Use the white-noise level sigma0 alone, ignoring the correlated noise.
+        """
+        # Averaging k raw samples divides the noise power at every frequency by k.
+        # [C3: comm_tod_noise_mod.f90::multiply_inv_N]
+        if self.is_white or white_only:
+            # P(f) = sigma0^2 is flat, so N^-power is one number and no FFT is needed.
+            tod_out = tod / (float(noise_params[0])**2/downsample_factor)**power
+            return tod_out - np.mean(tod_out)
+        # A mirrored FFT (length 2*ntod), so the filter does not wrap the scan's end onto its start.
+        ntod = tod.shape[0]
+        freqs = rfftfreq(2*ntod, d=downsample_factor/fsamp)
+        tod_f = forward_rfft_mirrored(tod)
+        tod_f /= (self.eval_full(freqs, noise_params)/downsample_factor)**power
+        tod_f[0] = 0.0  # Projects out the mean.
+        return backward_rfft_mirrored(tod_f, ntod)
 
     def sample_params(self, residual: NDArray, noise_params: NDArray, fsamp: float,
                       rng: np.random.Generator, *, bin_psd: bool = False) -> NDArray:

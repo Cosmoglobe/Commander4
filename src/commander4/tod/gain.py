@@ -321,14 +321,14 @@ class Gain(TODStep):
 
             # Whiten both with N^-1/2 and fit on the good blocks only: s^T N^-1 r becomes
             # sum(mask * s_white * r_white). [C3: accumulate_abscal] With `white_noise_weights`, N
-            # is sigma0^2 alone, as in C3's HFI runs. The TODs are block-averaged, so their rate is
-            # fsamp/downsample_factor, which apply_N_inv needs to place the 1/f noise weight at the
-            # right frequencies.
-            samprate, white_only = view.fsamp/view.downsample_factor, gain_cfg.white_noise_weights
-            s_white = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=samprate,
-                                                  power=0.5, white_only=white_only)
-            r_white = experiment_data.apply_N_inv(residual, view.noise_params, samprate=samprate,
-                                                  power=0.5, white_only=white_only)
+            # is sigma0^2 alone, as in C3's HFI runs.
+            noise_model, white_only = experiment_data.noise_model, gain_cfg.white_noise_weights
+            s_white = noise_model.apply_N_inv(s_cal, view.noise_params, view.fsamp,
+                                              view.downsample_factor, power=0.5,
+                                              white_only=white_only)
+            r_white = noise_model.apply_N_inv(residual, view.noise_params, view.fsamp,
+                                              view.downsample_factor, power=0.5,
+                                              white_only=white_only)
             s_N_inv_s[view.iscan, view.idet] = np.sum(mask * s_white**2)
             s_N_inv_r[view.iscan, view.idet] = np.sum(mask * s_white * r_white)
         return s_N_inv_s, s_N_inv_r

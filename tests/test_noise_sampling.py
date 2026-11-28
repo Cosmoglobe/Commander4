@@ -14,7 +14,6 @@ from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.sample_ncorr import (sample_correlated_noise,
                                                     corr_noise_realization_with_gaps)
 from commander4.tod.noise.sampling import Noise
-from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from tod_step_fakes import make_step
 
 
@@ -681,26 +680,20 @@ class TestSampleCorrelatedNoise:
 # ===================================================================
 
 class TestApplyNInv:
-    @staticmethod
-    def _detgroup(noise_model, fsamp=10.0):
-        return DetectorGroupTOD(scans=[], experiment_name="x", band_name="b", nside=64, nu=100.0,
-                                fwhm_arcmin=30.0, fsamp=fsamp, ndet=1, pols="IQU",
-                                noise_model=noise_model)
-
     @pytest.mark.parametrize("dtype", [np.float32, np.float64])
     @pytest.mark.parametrize("white_noise", [False, True])
-    @pytest.mark.parametrize("samprate", [None, 1.0])
-    def test_symmetry_contract(self, dtype: type, white_noise: bool, samprate: float | None):
+    @pytest.mark.parametrize("downsample_factor", [1, 10])
+    def test_symmetry_contract(self, dtype: type, white_noise: bool, downsample_factor: int):
         """N^-1 is symmetric: x^T N^-1 y = (N^-1 x)^T y, including the DC projection."""
         model = NoisePSDOof()
         model.is_white = white_noise
-        band = self._detgroup(model)
         rng = np.random.default_rng(17)
         for size in (997, 1024):
             x = (rng.normal(size=size) + 2.0).astype(dtype)
             y = (rng.normal(size=size) - 3.0).astype(dtype)
-            nx = band.apply_N_inv(x, np.array([2.0, 0.2, -1.7]), samprate=samprate)
-            ny = band.apply_N_inv(y, np.array([2.0, 0.2, -1.7]), samprate=samprate)
+            nx = model.apply_N_inv(x, np.array([2.0, 0.2, -1.7]), 10.0, downsample_factor)
+            ny = model.apply_N_inv(y, np.array([2.0, 0.2, -1.7]), 10.0, downsample_factor)
+            assert nx.dtype == dtype
             lhs = np.dot(x.astype(np.float64), ny.astype(np.float64))
             rhs = np.dot(nx.astype(np.float64), y.astype(np.float64))
             # Both dot products cancel heavily (|lhs| is orders of magnitude below the size of
@@ -711,17 +704,17 @@ class TestApplyNInv:
             np.testing.assert_allclose(lhs, rhs, rtol=0.0, atol=tolerance*scale)
 
     @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-    @pytest.mark.parametrize("samprate", [None, 1.0])
+    @pytest.mark.parametrize("downsample_factor", [1, 20])
     def test_symmetry_contract_with_a_five_parameter_model(self, dtype: type,
-                                                          samprate: float | None):
+                                                          downsample_factor: int):
         """N^-1 is symmetric with a five-parameter PSD model too."""
-        band = self._detgroup(NoisePSD2Oof(), fsamp=_2OOF_FSAMP)
+        model = NoisePSD2Oof()
         rng = np.random.default_rng(17)
         for size in (997, 1024):
             x = (rng.normal(size=size) + 2.0).astype(dtype)
             y = (rng.normal(size=size) - 3.0).astype(dtype)
-            nx = band.apply_N_inv(x, _2OOF_TRUTH, samprate=samprate)
-            ny = band.apply_N_inv(y, _2OOF_TRUTH, samprate=samprate)
+            nx = model.apply_N_inv(x, _2OOF_TRUTH, _2OOF_FSAMP, downsample_factor)
+            ny = model.apply_N_inv(y, _2OOF_TRUTH, _2OOF_FSAMP, downsample_factor)
             lhs = np.dot(x.astype(np.float64), ny.astype(np.float64))
             rhs = np.dot(nx.astype(np.float64), y.astype(np.float64))
             scale = np.linalg.norm(x.astype(np.float64)) * np.linalg.norm(ny.astype(np.float64))
@@ -734,37 +727,42 @@ class TestApplyNInv:
         when no block is masked."""
         model = NoisePSDOof()
         model.is_white = white_noise
-        band = self._detgroup(model)
         params = np.array([2.0, 0.2, -1.7])
         x = np.random.default_rng(5).normal(size=997) + 2.0
-        half = band.apply_N_inv(band.apply_N_inv(x, params, samprate=1.0, power=0.5), params,
-                                samprate=1.0, power=0.5)
-        np.testing.assert_allclose(half, band.apply_N_inv(x, params, samprate=1.0),
+        half = model.apply_N_inv(model.apply_N_inv(x, params, 10.0, 10, power=0.5), params,
+                                 10.0, 10, power=0.5)
+        np.testing.assert_allclose(half, model.apply_N_inv(x, params, 10.0, 10),
                                    rtol=1e-10, atol=1e-12)
 
     def test_white_only_ignores_the_correlated_noise(self):
         """With `white_only`, a 1/f model weights by sigma0 alone, at the downsampled rate."""
         params = np.array([2.0, 0.2, -1.7])
         x = np.random.default_rng(5).normal(size=997) + 2.0
-        out = self._detgroup(NoisePSDOof()).apply_N_inv(x, params, samprate=1.0, power=0.5,
-                                                        white_only=True)
+        out = NoisePSDOof().apply_N_inv(x, params, 10.0, 10, power=0.5, white_only=True)
         sigma_block = 2.0*np.sqrt(1.0/10.0)   # sigma0 of a 10-sample block average
         np.testing.assert_allclose(out, (x - x.mean())/sigma_block, rtol=1e-12)
 
+    def test_downsampling_divides_the_noise_power_by_the_factor(self):
+        """A k-sample block average has k times less noise power, at the k times lower rate."""
+        params = np.array([2.0, 0.2, -1.7])
+        x = np.random.default_rng(3).normal(size=997)
+        model = NoisePSDOof()
+        # The PSD at 100/10 Hz with downsample_factor 10 is the PSD at 10 Hz divided by 10.
+        np.testing.assert_allclose(model.apply_N_inv(x, params, 100.0, 10),
+                                   10.0*model.apply_N_inv(x, params, 10.0), rtol=1e-12)
+
     def test_projects_out_dc(self):
         """apply_N_inv must remove the DC (mean) mode, matching Commander multiply_inv_N."""
-        dg = self._detgroup(NoisePSDOof())
         tod = np.random.default_rng(0).normal(0.0, 1.0, 4096) + 12.0  # large offset
-        out = dg.apply_N_inv(tod, np.array([1.0, 0.5, -2.0]))
+        out = NoisePSDOof().apply_N_inv(tod, np.array([1.0, 0.5, -2.0]), 10.0)
         assert abs(np.mean(out)) < 1e-6 * np.max(np.abs(out))
 
     def test_white_fast_path(self):
         class _White(NoisePSDOof):
             is_white = True
-        dg = self._detgroup(_White())
         tod = np.random.default_rng(1).normal(0.0, 2.0, 4096) + 3.0
         sigma0 = 2.0
-        out = dg.apply_N_inv(tod, np.array([sigma0, 0.5, -2.0]))
+        out = _White().apply_N_inv(tod, np.array([sigma0, 0.5, -2.0]), 10.0)
         expected = tod / sigma0**2
         expected -= np.mean(expected)
         assert np.allclose(out, expected)

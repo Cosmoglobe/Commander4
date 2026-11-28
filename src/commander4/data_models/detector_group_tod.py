@@ -3,13 +3,11 @@
 Owns the scan list, the per-detector metadata, and the noise model. "Static" means it holds the
 data as read from disk; everything the Gibbs chain samples lives in `TODSamples` instead.
 """
-import numpy as np
 from numpy.typing import NDArray
 
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.noise.psd import NoisePSD
-from commander4.math_utils.fft import forward_rfft_mirrored, backward_rfft_mirrored
 from commander4.math_utils.transfer_func import TransferFunction
 from commander4.units import rj_to_band_unit_factor
 
@@ -94,36 +92,3 @@ class DetectorGroupTOD:
                 if accept is not None and not accept[iscan, det.det_idx_fullband]:
                     continue
                 yield iscan, det
-
-    def apply_N_inv(self, tod: NDArray, noise_params: NDArray, samprate: float|None = None,
-                    inplace=False, power: float = 1.0, white_only: bool = False) -> NDArray:
-        """ Applies the inverse noise covariance N^-1 of this Det-Group to the input TOD, using the
-            specified noise parameters. If a sample rate is specified, the TOD is assumed to have
-            been downsampled, and the noise level is scaled accordingly. The DC (mean) mode is
-            projected out, matching the Commander3 ``multiply_inv_N`` convention. ``power`` applies
-            N^-power instead; 0.5 gives the whitening filter N^-1/2. ``white_only`` uses the
-            white-noise level sigma0 alone, ignoring the correlated part of the PSD.
-        """
-        actual_samprate = samprate if samprate is not None else self.fsamp
-        tod_out = tod if inplace else np.zeros_like(tod)
-
-        # White-noise fast path: P(f) = sigma0^2 (flat), so N^-1 is a scalar and the FFT is skipped.
-        if self.noise_model.is_white or white_only:
-            scale = float(noise_params[0])**2
-            if samprate is not None and samprate != self.fsamp:
-                scale *= samprate/self.fsamp
-            tod_out[:] = tod/scale**power
-            tod_out -= np.mean(tod_out)  # Project out the DC mode (mean).
-            return tod_out
-
-        # Mirrored FFT (length 2*ntod) reduces boundary/periodicity ringing.
-        ntod = tod.shape[0]
-        freqs = np.fft.rfftfreq(2*ntod, d=1.0/actual_samprate)
-        noise_PS = self.noise_model.eval_full(freqs, noise_params)
-        if samprate is not None and samprate != self.fsamp:
-            noise_PS *= samprate/self.fsamp
-        tod_f = forward_rfft_mirrored(tod)
-        tod_f /= noise_PS**power
-        tod_f[0] = 0.0  # Project out the DC mode (mean), matching Commander multiply_inv_N.
-        tod_out[:] = backward_rfft_mirrored(tod_f, ntod)
-        return tod_out
